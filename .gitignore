@@ -1,0 +1,3 @@
+# 发布产物不跟 git：每次构建重新生成
+# 仅保留 README.md 和 LICENSE
+墨译-extension-*
