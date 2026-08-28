@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# WXT build & dev artifacts
+.output/
+.wxt/
+dist/
+
+# Secrets (private key for CRX packaging)
+*.pem
+keys/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editors
+.DS_Store
+Thumbs.db
+*.local
+.idea/
+.vscode/
+# 备份目录（不跟 git）
+备份/
+
+# github-upload 旧快照（已废弃，不跟 git）
+chrome-plugin/github-upload/
+chrome-plugin/github-upload.zip
+
+# CRX 打包产物
+chrome-plugin/.output/*.crx
+chrome-plugin/.output/*.zip
+
+# release 构建产物（如需跟 git 发布，删掉下行）
+chrome-plugin/release/墨译-extension-*
+
+# ZCode 会话/计划文件（本地开发工具，不跟 git）
+.zcode/
+
+# CRX 公钥（打包密钥的公开部分，不影响安全但仍非源码）
+chrome-plugin/墨译-keys/

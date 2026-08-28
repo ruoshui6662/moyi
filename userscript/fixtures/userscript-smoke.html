@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MoYi Userscript Smoke Fixture</title>
+  <style>
+    body { font-family: Georgia, serif; max-width: 640px; margin: 40px auto; line-height: 1.7; color: #222; }
+  </style>
+</head>
+<body>
+  <h1>The ink flows gently across the paper.</h1>
+  <p>Words carry weight even when written in a language you do not know.</p>
+  <p>A quiet paragraph about rivers and mountains rests between two distant seas.</p>
+
+  <script>
+    // ── GM API 模拟（仅冒烟夹具使用；模拟 Tampermonkey 提供的能力面）──
+    const gmStore = {
+      'personal-translator-config': {
+        endpoint: '', apiKey: '', model: '', targetLanguage: '简体中文',
+        disableReasoning: true, translationStyle: 'ink-line', translationColor: '#3f4a56',
+        translationFontSize: 0.92, translationFontFamily: '', translationLineHeight: 0,
+        translationLetterSpacing: 0, promptStyle: 'general', useCustomPrompt: false,
+        customPrompt: '', providerId: 'openai',
+        providers: { openai: { apiKey: 'sk-smoke', model: 'gpt-smoke' } },
+        shortcuts: { translate: '', restore: '' },
+      },
+    };
+    window.GM_getValue = (key) => {
+      if (!(key in gmStore)) throw new Error('not found');
+      return gmStore[key];
+    };
+    window.GM_setValue = (key, value) => { gmStore[key] = value; };
+    window.GM_deleteValue = (key) => { delete gmStore[key]; };
+    window.GM_addValueChangeListener = () => 1;
+    window.GM_registerMenuCommand = () => {};
+
+    // 模拟流式接口：按 SSE 增量返回带标签译文（两段累计 progress，验证增量解析与缓冲）
+    const TAGGED = [
+      '<paragraph_1>墨迹在纸上轻轻流淌。</paragraph_1>',
+      '<paragraph_2>即便用你不懂的语言写下，文字依然承载分量。</paragraph_2>',
+      '<paragraph_3>另一段关于河流与山峦的文字静静伫立在两片海洋之间。</paragraph_3>',
+    ].join('\n');
+    const sseFrame = (text) => 'data: ' + JSON.stringify({ choices: [{ delta: { content: text } }] }) + '\n\n';
+    window.__smokeCalls = [];
+    window.GM_xmlhttpRequest = (details) => {
+      window.__smokeCalls.push(details.url);
+      setTimeout(() => {
+        try {
+          if (/\/chat\/completions$/.test(details.url) && details.headers?.Authorization === 'Bearer sk-smoke') {
+            const half = Math.floor(TAGGED.length / 2);
+            details.onprogress?.({ responseText: sseFrame(TAGGED.slice(0, half)) });
+            details.onprogress?.({ responseText: sseFrame(TAGGED.slice(0, half)) + sseFrame(TAGGED.slice(half)) });
+            details.onload?.({ status: 200, responseText: '', responseHeaders: 'content-type: text/event-stream\r\n' });
+          } else {
+            details.onload?.({ status: 404, responseText: '{"error":"mock: unexpected url"}', responseHeaders: 'content-type: application/json\r\n' });
+          }
+        } catch (error) {
+          console.error('[smoke-mock]', error);
+        }
+      }, 30);
+      return { abort() {} };
+    };
+  </script>
+
+  <!-- 油猴产物以普通脚本加载（无沙箱），shim 落在页面全局——仅测试环境如此 -->
+  <script src="../dist/moyi.user.js"></script>
+
+  <!-- 冒烟自动化：经 __MOYI__ 钩子触发与真实菜单命令/悬浮按钮完全相同的代码路径 -->
+  <script>
+    setTimeout(() => {
+      const api = window.__MOYI__;
+      if (!api) { document.title = 'SMOKE-FAIL:no-hook'; return; }
+      if (location.hash === '#smoke-translate') {
+        api.translateNow();
+        setTimeout(() => {
+          const n = document.querySelectorAll('.personal-translator-translation').length;
+          const e = document.querySelectorAll('.personal-translator-error').length;
+          document.title = `SMOKE-T:${n}-E:${e}`;
+        }, 2500);
+      } else if (location.hash === '#smoke-full') {
+        // 链式场景：翻译 → 校验 → 还原 → 校验（覆盖 restoreAllTranslations 全路径）
+        api.translateNow();
+        setTimeout(() => api.restoreNow(), 3200);
+        setTimeout(() => {
+          const t = document.querySelectorAll('.personal-translator-translation').length;
+          const o = document.querySelectorAll('.personal-translator-original').length;
+          document.title = `SMOKE-FULL:T${t}-O:${o}`;
+        }, 4200);
+      } else if (location.hash === '#smoke-panel') {
+        api.openPanel();
+      }
+    }, 600);
+  </script>
+</body>
+</html>

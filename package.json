@@ -1,0 +1,22 @@
+{
+  "name": "personal-browser-translator",
+  "version": "0.1.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cd chrome-plugin && wxt",
+    "build": "cd chrome-plugin && wxt build",
+    "compile": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "build:userscript": "node userscript/build.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.28",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5",
+    "wxt": "^0.20.12"
+  },
+  "license": "GPL-3.0",
+  "description": "墨译：基于大模型的沉浸式网页双语翻译（Chrome MV3 插件 + 油猴脚本双发行版）。流式渲染、视口优先、上下文感知，支持 OpenAI 兼容服务商与 DeepL。"
+}
