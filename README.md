@@ -133,8 +133,8 @@ cp -r chrome-plugin/.output/chrome-mv3 chrome-plugin/dist
 npm run build:userscript   # 产物：userscript/dist/moyi.user.js（未压缩，符合 Greasy Fork 可读性要求）
 ```
 
-安装：Tampermonkey「添加新脚本」粘贴全文保存；或 Via → 脚本 → 新建粘贴启用。
-发布到 Greasy Fork 等站点时直接上传该文件；**每次更新记得递增根 `package.json` 的 `version`**（会写入 `@version` 头）。CRX 打包用 `chrome-plugin/scripts/gen-crx-key.mjs` 与 `墨译-keys/`。
+[墨译-油猴](https://greasyfork.org/zh-CN/scripts/592835-%E5%A2%A8%E8%AF%91-ai-%E7%BD%91%E9%A1%B5%E5%8F%8C%E8%AF%AD%E7%BF%BB%E8%AF%91-%E6%B2%B9%E7%8C%B4%E7%89%88)
+
 
 ## 📖 使用
 
