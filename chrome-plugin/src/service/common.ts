@@ -164,19 +164,60 @@ const reduceFrames = (frames: unknown[]): { payload: unknown; mode: 'json' | 'ss
  * 部分 OpenAI 兼容中转（如 New API / 9router）即使请求未带 stream:true，
  * 也可能返回流式文本。整块 JSON 解析失败后按行兜底，兼容：
  *   - SSE 帧：`data: {...}` 行；
- *   - 无前缀的裸 JSON 行（NDJSON 等实现）。
+ *   - 无前缀的裸 JSON 行（NDJSON 等实现）；
+ *   - 整段 JSON 后跟尾随内容 / 多个 JSON 对象无换行拼接 / BOM 前缀：
+ *     提取文本中首个完整 JSON 对象。
  * delta 帧按序合并增量文本；非 delta 帧（完整 message/choices）取最后一帧。
  */
 export const parseResponseBody = (text: string): { payload: unknown; mode: 'json' | 'sse' | 'none' } => {
-  const trimmed = text.trim();
+  const withoutBom = text.replace(/^\uFEFF/, '');
+  const trimmed = withoutBom.trim();
   if (!trimmed) return { payload: undefined, mode: 'none' };
   try {
     return { payload: JSON.parse(trimmed) as unknown, mode: 'json' };
   } catch {
-    const frames = collectFrames(trimmed.split(/\r?\n/));
-    if (frames.length === 0) return { payload: undefined, mode: 'none' };
-    return reduceFrames(frames);
+    // 兼容 CR 行尾（个别网关用 \r 分隔帧）
+    const frames = collectFrames(trimmed.split(/\r\n|[\r\n]/));
+    if (frames.length > 0) return reduceFrames(frames);
+    const embedded = extractFirstJsonObject(withoutBom);
+    if (embedded !== null) {
+      try {
+        return { payload: JSON.parse(embedded) as unknown, mode: 'json' };
+      } catch {
+        // 提取出的对象本身不完整，落入 none
+      }
+    }
+    return { payload: undefined, mode: 'none' };
   }
+};
+
+/**
+ * 提取文本中首个「完整且括号平衡」的 JSON 对象（跳过前导噪声）。
+ * 用于整段解析失败但正文确实以合法 JSON 开头、后续夹带尾随内容/重复对象的场景；
+ * 字符串字面量内的括号与转义会被正确跳过。
+ */
+export const extractFirstJsonObject = (text: string): string | null => {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null; // 括号未闭合：正文被截断
 };
 
 /** 构造非 2xx 的服务错误；对 429 限流给出可操作的提示并保留原始 detail 供排查。 */
@@ -386,7 +427,7 @@ export const translateWithOpenAICompatible = async (
     logger.debug('provider.response.parsed', { mode: parsed.mode, bytes: bodyText.length });
     if (parsed.mode === 'none') {
       throw new TranslationServiceError(
-        `翻译服务返回了无法解析的内容（前 120 字符：${bodyText.slice(0, 120)}）。若服务商以 SSE 流式返回，请检查中转是否强制开启流式输出。`,
+        buildUnparseableBodyMessage(bodyText, '翻译服务'),
       );
     }
     const payload = parsed.payload;
@@ -412,6 +453,13 @@ export const translateWithOpenAICompatible = async (
     globalThis.clearTimeout(timeout);
     signal?.removeEventListener('abort', abortFromCaller);
   }
+};
+
+/** 构造「响应体无法解析」的提示：附带头尾各 120 字符，便于定位脏数据来源。 */
+const buildUnparseableBodyMessage = (bodyText: string, serviceLabel: string): string => {
+  const head = bodyText.slice(0, 120);
+  const tail = bodyText.slice(-120);
+  return `${serviceLabel}返回了无法解析的内容（响应体头：${head}${tail ? `；尾：${tail}` : ''}）。若服务商以 SSE 流式返回，请检查中转是否强制开启流式输出。`;
 };
 
 export const extractTaggedTranslations = (raw: string, count: number): string[] => {
@@ -494,7 +542,7 @@ export const completeWithOpenAICompatible = async (
     const bodyText = await response.text();
     const parsed = parseResponseBody(bodyText);
     if (parsed.mode === 'none') {
-      throw new TranslationServiceError(`服务返回了无法解析的内容（前 120 字符：${bodyText.slice(0, 120)}）。`);
+      throw new TranslationServiceError(buildUnparseableBodyMessage(bodyText, '服务'));
     }
     const extraction = extractTranslationContent(parsed.payload);
     if (!extraction) {
@@ -638,7 +686,7 @@ const requestBatch = async (
     logger.debug('provider.response.parsed', { mode: parsed.mode, bytes: bodyText.length });
     if (parsed.mode === 'none') {
       throw new TranslationServiceError(
-        `翻译服务返回了无法解析的内容（前 120 字符：${bodyText.slice(0, 120)}）。若服务商以 SSE 流式返回，请检查中转是否强制开启流式输出。`,
+        buildUnparseableBodyMessage(bodyText, '翻译服务'),
       );
     }
     const payload = parsed.payload;
@@ -825,7 +873,7 @@ export const streamTranslateBatch = async (
       const parsed = parseResponseBody(bodyText);
       if (parsed.mode === 'none') {
         throw new TranslationServiceError(
-          `翻译服务返回了无法解析的内容（前 120 字符：${bodyText.slice(0, 120)}）。若服务商以 SSE 流式返回，请检查中转是否强制开启流式输出。`,
+          buildUnparseableBodyMessage(bodyText, '翻译服务'),
         );
       }
       const payload = parsed.payload;
