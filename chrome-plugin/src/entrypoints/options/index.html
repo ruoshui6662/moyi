@@ -1200,7 +1200,7 @@
                     <label for="endpoint">接口地址（Base URL）</label>
                     <input id="endpoint" type="url" placeholder="https://api.openai.com/v1" />
                   </div>
-                  <div class="field">
+                  <div class="field" id="apiKeyField">
                     <label for="apiKey" id="apiKeyLabel">API Key</label>
                     <div class="key-wrap">
                       <input id="apiKey" type="password" placeholder="sk-…" />
@@ -1239,6 +1239,12 @@
                   谷歌翻译使用 Google 翻译服务端点，<strong>无需密钥与接口地址</strong>，直接点「测试连接」即可验证。
                   该端点为未公开的在线服务（非 Google 商业 SLA），文本会发送到 Google 服务器；
                   <strong>Google 服务在国内通常无法直连</strong>，测试失败多半是网络不可达，请改用其他服务商。
+                </p>
+                <p class="model-hint" id="ollamaHint" hidden>
+                  Ollama 默认运行在本机 <code>http://localhost:11434</code>，本地 API 无需密钥；请先用
+                  <code>ollama pull 模型名</code> 下载模型，再点「获取模型」或手动填写模型名称。
+                  若连接返回 403，请将当前扩展的 <code>chrome-extension://&lt;扩展 ID&gt;</code> 加入 Ollama 的
+                  <code>OLLAMA_ORIGINS</code> 后重启 Ollama 服务。
                 </p>
                 <div class="field" id="modelField">
                   <label for="model">模型名称</label>

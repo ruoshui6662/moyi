@@ -3,16 +3,18 @@ import { logger } from '../../utils/logger';
 import { sanitizePromptStyle } from '../../utils/prompts';
 import { computeMenuPlacement } from '../../utils/popupMenuPosition';
 import {
-  activateConfiguredProvider,
-  getConfiguredProviderIds,
-  getProviderDisplayName,
-  getProviderMark,
-  getProviderMeta,
-  isProviderConfigured,
-  resolveProviderSettings,
   type ProviderMeta,
   type ProviderSettings,
 } from '../../utils/providers';
+import {
+  activateExtensionConfiguredProvider as activateConfiguredProvider,
+  getExtensionConfiguredProviderIds as getConfiguredProviderIds,
+  getExtensionProviderDisplayName as getProviderDisplayName,
+  getExtensionProviderMark as getProviderMark,
+  getExtensionProviderMeta as getProviderMeta,
+  isExtensionProviderConfigured as isProviderConfigured,
+  resolveExtensionProviderSettings as resolveProviderSettings,
+} from '../../utils/extensionProviders';
 
 const SUPPORTED_LANGUAGES = ['简体中文', '繁體中文', 'English', '日本語', '한국어'] as const;
 

@@ -11,7 +11,7 @@ export default defineConfig({
   manifest: {
     version,
     name: '墨译 - AI 网页双语翻译',
-    description: '基于大模型的沉浸式网页双语翻译：流式渲染、视口优先、上下文感知。支持 OpenAI 兼容服务商、DeepL、腾讯翻译、微软翻译、谷歌翻译。',
+    description: '基于大模型的沉浸式网页双语翻译：流式渲染、视口优先、上下文感知。支持 OpenAI 兼容服务商、Ollama、DeepL、腾讯翻译、微软翻译、谷歌翻译。',
     permissions: ['storage', 'activeTab', 'scripting', 'contextMenus'],
     host_permissions: ['<all_urls>'],
     icons: {

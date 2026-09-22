@@ -15,21 +15,24 @@ import type { TranslationStylePreset } from '../../utils/config';
 import type { TranslationPromptStyle } from '../../utils/prompts';
 import { sanitizePromptStyle } from '../../utils/prompts';
 import {
-  BUILT_IN_PROVIDERS,
   createCustomProviderId,
-  getCustomProviderIds,
-  getProviderDisplayName,
-  getProviderMark,
-  getProviderMeta,
-  isCustomProviderId,
   isDeeplProviderId,
   isMtProviderId,
   isNoKeyMtProviderId,
-  isProviderConfigured,
-  resolveProviderSettings,
   type ProviderMeta,
   type ProviderSettings,
 } from '../../utils/providers';
+import {
+  EXTENSION_BUILT_IN_PROVIDERS as BUILT_IN_PROVIDERS,
+  getExtensionCustomProviderIds as getCustomProviderIds,
+  getExtensionProviderDisplayName as getProviderDisplayName,
+  getExtensionProviderMark as getProviderMark,
+  getExtensionProviderMeta as getProviderMeta,
+  isExtensionCustomProviderId as isCustomProviderId,
+  isExtensionProviderConfigured as isProviderConfigured,
+  isOllamaProviderId,
+  resolveExtensionProviderSettings as resolveProviderSettings,
+} from '../../utils/extensionProviders';
 import { buildTranslationCss, toTranslationTheme, applyTranslationStyles } from '../content/translationRenderer';
 import { beginTranslation } from '../content/translationState';
 import { renderTranslation, restoreTranslation } from '../content/translationRenderer';
@@ -68,6 +71,10 @@ const activeBadge = document.querySelector<HTMLSpanElement>('#activeBadge')!;
 const fetchModelsButton = document.querySelector<HTMLButtonElement>('#fetchModels')!;
 const modelSelect = document.querySelector<HTMLSelectElement>('#modelSelect')!;
 const manualModelButton = document.querySelector<HTMLButtonElement>('#manualModel')!;
+const ollamaHint = document.querySelector<HTMLParagraphElement>('#ollamaHint')!;
+
+const isKeylessProvider = (id: string): boolean =>
+  isOllamaProviderId(id) || isNoKeyMtProviderId(id);
 const modelField = document.querySelector<HTMLDivElement>('#modelField')!;
 const disableReasoningRow = document.querySelector<HTMLDivElement>('#disableReasoningRow')!;
 const deeplPlanField = document.querySelector<HTMLDivElement>('#deeplPlanField')!;
@@ -78,6 +85,7 @@ const tencentFields = document.querySelector<HTMLDivElement>('#tencentFields')!;
 const serviceFields = document.querySelector<HTMLDivElement>('#serviceFields')!;
 const microsoftHint = document.querySelector<HTMLParagraphElement>('#microsoftHint')!;
 const googleHint = document.querySelector<HTMLParagraphElement>('#googleHint')!;
+const apiKeyField = document.querySelector<HTMLDivElement>('#apiKeyField')!;
 const presetInputs = Array.from(document.querySelectorAll<HTMLInputElement>('input[name="preset"]'));
 const colorInput = document.querySelector<HTMLInputElement>('#translationColor')!;
 const colorSwatches = Array.from(
@@ -815,7 +823,7 @@ const selectProvider = (id: string): void => {
   const isTencent = id === 'tencent';
   const isMicrosoft = id === 'microsoft';
   const isGoogle = id === 'google';
-  const isNoKeyMt = isNoKeyMtProviderId(id);
+  const isNoKeyMt = isKeylessProvider(id);
   const runtime = resolveProviderSettings(currentConfig, id);
   endpoint.value = runtime.endpoint;
   activeSavedApiKey = runtime.apiKey.trim();
@@ -846,10 +854,12 @@ const selectProvider = (id: string): void => {
   // DeepL：显示免费/专业套餐选择；腾讯：显示 SecretKey / Region 与申请指引
   deeplPlanField.hidden = !isDeepl;
   tencentFields.hidden = !isTencent;
-  // 微软/谷歌翻译：免密钥，隐藏接口地址/密钥等凭据字段，显示对应说明
-  serviceFields.hidden = isNoKeyMt;
+  // 微软/谷歌翻译使用内置端点；Ollama 保留接口地址供本机服务配置
+  serviceFields.hidden = isMicrosoft || isGoogle;
+  apiKeyField.hidden = isNoKeyMt;
   microsoftHint.hidden = !isMicrosoft;
   googleHint.hidden = !isGoogle;
+  ollamaHint.hidden = !isOllamaProviderId(id);
   if (isDeepl) {
     deeplPlanSelect.value = endpoint.value.includes('api.deepl.com') && !endpoint.value.includes('api-free')
       ? 'https://api.deepl.com/v2'
@@ -872,9 +882,15 @@ const saveProviderNow = async (): Promise<void> => {
     const modelValue = model.value.trim();
     const isMt = isMtProviderId(selectedProviderId);
     const isTencent = selectedProviderId === 'tencent';
-    const isNoKeyMt = isNoKeyMtProviderId(selectedProviderId);
-    if (!isNoKeyMt && (!apiKeyValue || !endpointValue || (!isMt && !modelValue))) {
-      setStatus(serviceStatus, isMt ? '请填写接口地址与 API Key（腾讯翻译另需 SecretKey）。' : '请填写接口地址、API Key 与模型名称后再保存。', 'error');
+    const isOllama = isOllamaProviderId(selectedProviderId);
+    const isNoKeyMt = isKeylessProvider(selectedProviderId);
+    if (!endpointValue || (!isMt && !modelValue) || (!isNoKeyMt && !apiKeyValue)) {
+      const message = isOllama
+        ? '请填写 Ollama 接口地址与模型名称。'
+        : isMt
+          ? '请填写接口地址与 API Key（腾讯翻译另需 SecretKey）。'
+          : '请填写接口地址、API Key 与模型名称后再保存。';
+      setStatus(serviceStatus, message, 'error');
       return;
     }
     if (isTencent && !apiSecretValue) {
@@ -887,7 +903,11 @@ const saveProviderNow = async (): Promise<void> => {
       customSettings.name = providerNameInput.value.trim().slice(0, 24);
     }
     const providerEntry: ProviderSettings = isNoKeyMt
-      ? { apiKey: '', endpoint: '' }
+      ? {
+          apiKey: '',
+          endpoint: isOllama ? endpointValue : '',
+          ...(isOllama ? { model: modelValue } : {}),
+        }
       : {
           apiKey: apiKeyValue,
           endpoint: endpointValue,
@@ -1046,12 +1066,13 @@ document.querySelector<HTMLButtonElement>('#test')!.addEventListener('click', ()
     const testingFor = selectedProviderId;
     const stillOnPanel = (): boolean => selectedProviderId === testingFor;
     try {
-      const isNoKeyMt = isNoKeyMtProviderId(testingFor);
-      // 微软/谷歌翻译免密钥：不要求 API Key；接口地址留空时回退内置默认
+      const isOllama = isOllamaProviderId(testingFor);
+      const isNoKeyMt = isKeylessProvider(testingFor);
+      // 微软/谷歌翻译及 Ollama 均可免 API Key；接口地址留空时回退内置默认
       const endpointValue = endpoint.value.trim() || getProviderMeta(testingFor).endpoint;
       const apiKeyValue = effectiveApiKey();
-      if (!endpointValue || (!apiKeyValue && !isNoKeyMt)) {
-        setStatus(serviceStatus, isNoKeyMt ? '无需填写任何字段，直接点击即可测试。' : '请先填写接口地址与 API Key。', 'error');
+      if (!endpointValue || (!apiKeyValue && !isNoKeyMt) || (isOllama && !model.value.trim())) {
+        setStatus(serviceStatus, isOllama ? '请先填写接口地址与模型名称。' : isNoKeyMt ? '无需填写任何字段，直接点击即可测试。' : '请先填写接口地址与 API Key。', 'error');
         return;
       }
       setStatus(serviceStatus, '正在测试连接…', 'busy');

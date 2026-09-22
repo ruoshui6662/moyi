@@ -3,6 +3,7 @@ import { completeWithOpenAICompatible } from '../service/common';
 import { getMtAdapter, type MtTranslationRequest } from '../service/mt';
 import { SEGMENTATION_SYSTEM_PROMPT } from '../utils/subtitles/ai-segmenter';
 import { getProviderMeta, isMtProviderId, isNoKeyMtProviderId, parseModelsPayload, resolveProviderSettings } from '../utils/providers';
+import { isOllamaProviderId, prepareExtensionProviderConfig, prepareExtensionRequestApiKey } from '../utils/extensionProviders';
 import { getConfig, type TranslatorConfig } from '../utils/config';
 import { logger } from '../utils/logger';
 
@@ -130,9 +131,10 @@ export default defineBackground(() => {
         abortController = new AbortController();
         try {
           const config = await getConfig();
-          logger.info('background.stream_translation.start', { paragraphCount: safeParagraphs.length, model: config.model });
+          const requestConfig = prepareExtensionProviderConfig(config);
+          logger.info('background.stream_translation.start', { paragraphCount: safeParagraphs.length, model: requestConfig.model });
           const { completedCount } = await streamTranslateBatch(
-            { ...config, paragraphs: safeParagraphs, pageContext: safeContext },
+            { ...requestConfig, paragraphs: safeParagraphs, pageContext: safeContext },
             {
               onPartial: (index, text) => send({ type: 'partial', index, text }),
               onParagraph: (index, text) => send({ type: 'paragraph', index, text }),
@@ -200,7 +202,12 @@ if (type === 'test-connection') {
           const model = overrides.model?.trim() ?? '';
           if (!endpoint) throw new Error('请填写接口地址。');
           validateEndpointUrl(endpoint);
-          const effective = { ...config, endpoint, apiKey, model };
+          const effective = {
+            ...config,
+            endpoint,
+            apiKey: prepareExtensionRequestApiKey(overrides.providerId ?? '', apiKey),
+            model,
+          };
           logger.info('background.connection_test.start', { model, endpoint, kind: overrides.kind ?? '' });
           // 传统 MT 后端（DeepL / 腾讯翻译 / 微软翻译）：按 providerId 分发到适配器
           if (overrides.kind === 'mt' || overrides.kind === 'deepl') {
@@ -222,7 +229,7 @@ if (type === 'test-connection') {
             sendResponse({ ok: true, pong });
             return;
           }
-          if (!apiKey) throw new Error('请填写 API Key。');
+          if (!apiKey && !isOllamaProviderId(overrides.providerId ?? '')) throw new Error('请填写 API Key。');
           const pong = await testOpenAICompatibleConnection(effective);
           logger.info('background.connection_test.success', { returnedCharacters: pong.length });
           sendResponse({ ok: true, pong });
@@ -242,7 +249,8 @@ if (type === 'test-connection') {
             sendResponse({ ok: true, translations });
             return;
           }
-          const translations = await translateBatchWithOpenAICompatible({ ...config, paragraphs: safeParagraphs, maxBatchSize, pageContext: safeContext });
+          const requestConfig = prepareExtensionProviderConfig(config);
+          const translations = await translateBatchWithOpenAICompatible({ ...requestConfig, paragraphs: safeParagraphs, maxBatchSize, pageContext: safeContext });
           logger.info('background.batch_translation.success', { paragraphCount: safeParagraphs.length, outputCharacters: translations.join('').length });
           sendResponse({ ok: true, translations });
           return;
@@ -264,12 +272,13 @@ if (type === 'test-connection') {
             return;
           }
           logger.info('background.subtitle_segmentation.start', { chunks: jsonChunks.length, model: config.model });
+          const requestConfig = prepareExtensionProviderConfig(config);
           let vtt = '';
           for (const chunk of jsonChunks as string[]) {
             const text = await completeWithOpenAICompatible({
-              endpoint: config.endpoint,
-              apiKey: config.apiKey,
-              model: config.model,
+              endpoint: requestConfig.endpoint,
+              apiKey: requestConfig.apiKey,
+              model: requestConfig.model,
               system: SEGMENTATION_SYSTEM_PROMPT,
               user: `Re-segment these word-level subtitle fragments into sentences:\n${chunk}`,
               maxTokens: 8192,
@@ -294,7 +303,8 @@ if (isMtBackend(config)) {
             sendResponse({ ok: true, translation });
             return;
           }
-        const translation = await translateWithOpenAICompatible({ ...config, text: safeText });
+        const requestConfig = prepareExtensionProviderConfig(config);
+        const translation = await translateWithOpenAICompatible({ ...requestConfig, text: safeText });
         logger.info('background.translation.success', { outputCharacters: translation.length });
         sendResponse({ ok: true, translation });
       } catch (error) {
