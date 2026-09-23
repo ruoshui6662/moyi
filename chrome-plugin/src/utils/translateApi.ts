@@ -52,7 +52,8 @@ export interface StreamBatchCallbacks {
   onPartial: (index: number, text: string) => void;
   onParagraph: (index: number, text: string) => void;
   onError: (error: string) => void;
-  onDone: (completedCount: number) => void;
+  /** truncated=true 表示服务商以 finish_reason=length 结束，输出被截断。 */
+  onDone: (completedCount: number, truncated?: boolean) => void;
 }
 
 export interface StreamHandle {
@@ -68,7 +69,7 @@ export const streamBatchTranslation = (
 
   port.onMessage.addListener((message: unknown) => {
     if (!message || typeof message !== 'object') return;
-    const msg = message as { type?: string; index?: number; text?: string; error?: string; completedCount?: number };
+    const msg = message as { type?: string; index?: number; text?: string; error?: string; completedCount?: number; truncated?: boolean };
     if (msg.type === 'partial' && typeof msg.index === 'number' && typeof msg.text === 'string') {
       callbacks.onPartial(msg.index, msg.text);
     } else if (msg.type === 'paragraph' && typeof msg.index === 'number' && typeof msg.text === 'string') {
@@ -81,7 +82,7 @@ export const streamBatchTranslation = (
     } else if (msg.type === 'done') {
       if (settled) return;
       settled = true;
-      callbacks.onDone(msg.completedCount ?? 0);
+      callbacks.onDone(msg.completedCount ?? 0, msg.truncated ?? false);
       port.disconnect();
     }
   });

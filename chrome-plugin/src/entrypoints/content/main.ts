@@ -1,6 +1,6 @@
 import { CONFIG_STORAGE_KEY, getConfig, type TranslatorConfig } from '../../utils/config';
 import { describeKeyEvent } from '../../utils/shortcuts';
-import { restoreAllTranslations, stopTranslation, translatePage } from './trans';
+import { flushPendingCacheWrites, restoreAllTranslations, stopTranslation, translatePage } from './trans';
 import { applyTranslationStyles, toTranslationTheme } from './translationRenderer';
 import { applyFloatAppearance, mountFloatingButton, syncFloatingButtonState, type FloatingButtonOptions } from './floatingButton';
 
@@ -113,8 +113,10 @@ export default defineContentScript({
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // 页面卸载时断开观察，避免泄漏
+    // 页面卸载时断开观察，避免泄漏；并尽力刷写待写缓存——
+    // 中途关标签/跳转不再丢弃已翻结果，回访可直接命中缓存（storage 写入尽力而为，不等待完成）。
     const dispose = (): void => {
+      flushPendingCacheWrites();
       observer.disconnect();
       if (stateTimer) window.clearTimeout(stateTimer);
       unmountFloat();

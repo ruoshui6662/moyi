@@ -100,6 +100,48 @@ describe('translation core', () => {
     expect(candidates[0].typography).toHaveProperty('lineHeightRatio');
   });
 
+  it('known 集合跳过已知候选及其子树，只返回新候选（长文滚动补扫）', () => {
+    document.body.innerHTML = `
+      <article>
+        <p>Known first paragraph that was scanned in the initial wave.</p>
+        <p>Known second paragraph scanned together with the first one.</p>
+        <p>A brand new third paragraph discovered by the rescan later.</p>
+      </article>
+    `;
+
+    const first = findTranslationCandidates(document.body);
+    expect(first).toHaveLength(3);
+    const known = new Set(first.slice(0, 2).map((candidate) => candidate.element));
+
+    const second = findTranslationCandidates(document.body, 100, known);
+    expect(second).toHaveLength(1);
+    expect(second[0]?.text).toContain('brand new third paragraph');
+  });
+
+  it('known 候选的子树整体跳过，不会把其后代翻出来当新候选', () => {
+    // 父块直接文本占多数（子覆盖率 <80%）→ 父块自身是候选；
+    // 首扫 cap=1 时走到父块即达上限，其子 <p> 未被评估——这正是长文补扫会撞上的
+    // 「已知父块内部还藏着可翻译后代」场景，known 必须连子树一起拒绝。
+    document.body.innerHTML = `
+      <div class="wrapper">Wrapper owns most of its text content directly, with plenty of prose padding around the edges to dominate coverage.
+        <p>Nested paragraph text inside wrapper.</p>
+      </div>
+      <p>Following sibling paragraph for separation.</p>
+    `;
+
+    const first = findTranslationCandidates(document.body, 1);
+    expect(first).toHaveLength(1);
+    expect(first[0]?.element.classList.contains('wrapper')).toBe(true);
+
+    const known = new Set(first.map((candidate) => candidate.element));
+    const second = findTranslationCandidates(document.body, 100, known);
+    const texts = second.map((candidate) => candidate.text);
+
+    expect(texts.some((text) => text.includes('Nested paragraph'))).toBe(false);
+    expect(texts.some((text) => text.includes('Following sibling'))).toBe(true);
+    expect(texts.some((text) => text.includes('Wrapper owns most'))).toBe(false);
+  });
+
   it('excludes interactive controls and table structure rows from candidates', () => {
     document.body.innerHTML = `
       <button>Click me to perform an action</button>

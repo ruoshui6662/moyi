@@ -100,4 +100,52 @@ describe('BatchingScheduler', () => {
 
     expect(runs).toBeLessThanOrEqual(1);
   });
+
+  it('front 入队插到队首（近窗口抢占预取积压），缺省行为不变', async () => {
+    const order: string[] = [];
+    const scheduler = new BatchingScheduler({
+      batchSize: 1,
+      concurrency: 1,
+      runBatch: async (items) => {
+        order.push(items[0]!.text);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      },
+    });
+
+    scheduler.enqueue([
+      { text: 'a', element: document.createElement('p') },
+      { text: 'b', element: document.createElement('p') },
+    ]);
+    // drain 同步取走 a，b 在队列中
+    scheduler.enqueue([{ text: 'c', element: document.createElement('p') }]);
+    scheduler.enqueue([{ text: 'd', element: document.createElement('p') }], { front: true });
+    await scheduler.waitForIdle();
+
+    expect(order).toEqual(['a', 'd', 'b', 'c']);
+  });
+
+  it('maxBatchChars 按字符预算拆批，单项超预算仍独占一批（只拆批不拆段）', async () => {
+    const batchChars: number[] = [];
+    const scheduler = new BatchingScheduler({
+      batchSize: 5,
+      concurrency: 1,
+      itemChars: (item) => item.text.length,
+      maxBatchChars: 10,
+      runBatch: async (items) => {
+        batchChars.push(items.reduce((sum, item) => sum + item.text.length, 0));
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      },
+    });
+
+    scheduler.enqueue([
+      { text: 'aaaa', element: document.createElement('p') },     // 4
+      { text: 'bbbbbb', element: document.createElement('p') },   // 6 → 4+6=10 同批
+      { text: 'cccc', element: document.createElement('p') },     // 4 → 10+4>10 另起
+      { text: 'x'.repeat(30), element: document.createElement('p') }, // 30 超预算独占
+      { text: 'dd', element: document.createElement('p') },       // 2 → 独立尾批
+    ]);
+    await scheduler.waitForIdle();
+
+    expect(batchChars).toEqual([10, 4, 30, 2]);
+  });
 });

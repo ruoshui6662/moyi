@@ -145,6 +145,13 @@ const gmStreamTranslateBatch = async (
     transport: 'gm_xmlhttp_request',
   });
 
+  // 空闲超时状态置于函数作用域：末尾 .catch 的错误映射也要读 abortCause。
+  // 与扩展端语义一致：响应头阶段 30s；收到增量后连续 30s 无新字节才中断，
+  // 取代原「总时长 30s 硬顶」——那会把正在正常出字的慢模型从流中间掐断。
+  const STREAM_IDLE_TIMEOUT_MS = 30_000;
+  let abortCause: 'idle' | 'caller' | null = null;
+  let streamTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
   return new Promise<{ completedCount: number }>((resolve, reject) => {
     let settled = false;
     let sseBuffer = '';
@@ -154,13 +161,26 @@ const gmStreamTranslateBatch = async (
     const finish = (outcome: () => void): void => {
       if (settled) return;
       settled = true;
-      globalThis.clearTimeout(timeout);
+      if (streamTimer !== undefined) globalThis.clearTimeout(streamTimer);
       signal?.removeEventListener('abort', abortFromCaller);
       outcome();
     };
 
-    const timeout = globalThis.setTimeout(() => controller.abort(), 30_000);
+    const armIdleTimeout = (): void => {
+      if (streamTimer !== undefined) globalThis.clearTimeout(streamTimer);
+      streamTimer = globalThis.setTimeout(() => {
+        abortCause = 'idle';
+        controller.abort();
+        try {
+          handle?.abort();
+        } catch {
+          // 已结束的请求 abort 无害
+        }
+      }, STREAM_IDLE_TIMEOUT_MS);
+    };
+    armIdleTimeout();
     const abortFromCaller = (): void => {
+      abortCause = 'caller';
       controller.abort();
       try {
         handle?.abort();
@@ -238,6 +258,7 @@ const gmStreamTranslateBatch = async (
         onprogress: (response) => {
           const text = response.responseText ?? '';
           if (text.length <= lastProgressLength) return;
+          armIdleTimeout();
           sawIncrementalText = true;
           sseBuffer += text.slice(lastProgressLength);
           lastProgressLength = text.length;
@@ -267,6 +288,9 @@ const gmStreamTranslateBatch = async (
     }
   }).catch((error: unknown) => {
     if (error instanceof DOMException && error.name === 'AbortError') {
+      if (abortCause === 'idle') {
+        throw new Error('模型流式输出中断：连续 30 秒未收到新内容，请检查模型服务或更换 Endpoint。');
+      }
       throw new Error('模型请求超过 30 秒仍未响应，请检查 Endpoint、网络或模型服务。');
     }
     throw error;

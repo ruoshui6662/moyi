@@ -31,6 +31,56 @@ export class TranslationServiceError extends Error {
   }
 }
 
+/** 可安全重试的失败：瞬时网关错误（408/502/503/504）与网络层错误。
+ * 429 尊重限流（保留带重置时间的既有提示，不重试）；超时与主动 abort 不重试——重试只会更慢。 */
+const RETRYABLE_STATUS: ReadonlySet<number> = new Set([408, 502, 503, 504]);
+const RETRY_DELAYS_MS = [1000, 3000] as const;
+
+const isRetryableRequestError = (error: unknown): boolean => {
+  if (error instanceof TranslationServiceError) {
+    return error.status !== undefined && RETRYABLE_STATUS.has(error.status);
+  }
+  // fetch 网络失败（连接重置 / DNS 瞬断）为 TypeError；主动 abort 是 DOMException，不在此列
+  return error instanceof TypeError;
+};
+
+/** 只包住「发起请求到拿到响应头」这一步：已开始接收正文的流绝不重试，避免重复渲染与重复计费。
+ *  网络层错误（TypeError）与瞬时 HTTP 状态（408/502/503/504）共享 2 次重试预算；
+ *  非可重试状态原样返回给调用方，由 throwHttpError 统一处理（429 文案等保持不变）。 */
+const fetchWithRetry = async (input: string, init: RequestInit): Promise<Response> => {
+  for (let attempt = 0; ; attempt += 1) {
+    const canRetry = attempt < RETRY_DELAYS_MS.length;
+    let response: Response;
+    try {
+      response = await fetch(input, init);
+    } catch (error) {
+      if (!canRetry || !isRetryableRequestError(error)) throw error;
+      logger.warn('provider.request.retry', { attempt: attempt + 1, delayMs: RETRY_DELAYS_MS[attempt], error });
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, RETRY_DELAYS_MS[attempt]);
+      });
+      continue;
+    }
+    if (response.ok || !canRetry || !RETRYABLE_STATUS.has(response.status)) return response;
+    logger.warn('provider.request.retry', { attempt: attempt + 1, delayMs: RETRY_DELAYS_MS[attempt], status: response.status });
+    void response.body?.cancel().catch(() => undefined);
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, RETRY_DELAYS_MS[attempt]);
+    });
+  }
+};
+
+/** 读取标准 OpenAI 兼容响应的 finish_reason（用于识别 length 截断）。 */
+const readFinishReason = (payload: unknown): string | null => {
+  if (!payload || typeof payload !== 'object') return null;
+  const choices = (payload as Record<string, unknown>).choices;
+  const first = Array.isArray(choices) ? choices[0] : undefined;
+  const reason = first && typeof first === 'object' ? (first as Record<string, unknown>).finish_reason : undefined;
+  return typeof reason === 'string' && reason ? reason : null;
+};
+
+const TRUNCATED_MESSAGE = '译文被服务商输出上限截断（finish_reason=length），未能完整返回。建议：拆分过长段落，或在服务商处提高输出上限。';
+
 /**
  * 是否为本机/内网可信任地址：http 明文传输仅在这些目标上放行。
  * 第一性原理：风险来自 Key 跨越用户不控制的网络（公网/WAN）；
@@ -107,15 +157,39 @@ export const validateEndpointUrl = (endpoint: string): string => {
 };
 
 /**
- * 归一化 Base URL：去尾斜杠、剥掉误填的 /chat/completions 后缀，并校验协议安全。
+ * Ollama 本机默认端口：用户按官方示例填「http://localhost:11434」（漏掉版本根 /v1）时，
+ * 自动补上 /v1，避免 OpenAI 兼容路径拼成 /chat/completions 而 404。
+ * 仅命中本机回环地址 + 默认端口且无路径的裸 base，不碰任何其他服务商与自定义路径。
+ */
+const OLLAMA_LOCAL_PORT = '11434';
+const OLLAMA_LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+
+const appendOllamaVersionRoot = (base: string): string => {
+  try {
+    const url = new URL(base);
+    if (url.port !== OLLAMA_LOCAL_PORT) return base;
+    const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (!OLLAMA_LOCAL_HOSTNAMES.has(hostname)) return base;
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path !== '' && path !== '/') return base;
+    return `${url.origin}/v1`;
+  } catch {
+    return base;
+  }
+};
+
+/**
+ * 归一化 Base URL：去尾斜杠、剥掉误填的 /chat/completions 后缀，并校验协议安全；
+ * 对本机 Ollama 默认端口自动补 /v1。
  * 翻译与模型列表等所有派生路径必须共用，避免"翻译可用但 /models 404"的不一致。
  */
 export const normalizeBaseUrl = (endpoint: string): string => {
   validateEndpointUrl(endpoint);
   const trimmed = endpoint.trim().replace(/\/+$/, '');
-  return trimmed.endsWith('/chat/completions')
+  const withoutSuffix = trimmed.endsWith('/chat/completions')
     ? trimmed.slice(0, -'/chat/completions'.length)
     : trimmed;
+  return appendOllamaVersionRoot(withoutSuffix);
 };
 
 const normalizeEndpoint = (endpoint: string): string => `${normalizeBaseUrl(endpoint)}/chat/completions`;
@@ -391,7 +465,7 @@ export const translateWithOpenAICompatible = async (
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithRetry(url, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -437,6 +511,10 @@ export const translateWithOpenAICompatible = async (
       const detail = describeChoicesDetail(payload);
       logger.error('provider.response.unrecognized', { shape: describeResponseShape(payload), choices: detail });
       throw new TranslationServiceError(buildUnrecognizedMessage(payload, detail));
+    }
+    if (readFinishReason(payload) === 'length') {
+      logger.error('provider.response.truncated', { model: request.model, finishReason: 'length', outputCharacters: extraction.content.length });
+      throw new TranslationServiceError(TRUNCATED_MESSAGE);
     }
     if (extraction.source === 'reasoning') {
       logger.info('provider.response.reasoning_extracted', { durationMs: Date.now() - startedAt, outputCharacters: extraction.content.length, model: request.model });
@@ -515,7 +593,7 @@ export const completeWithOpenAICompatible = async (
   signal?.addEventListener('abort', abortFromCaller, { once: true });
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -654,7 +732,7 @@ const requestBatch = async (
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithRetry(url, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -695,6 +773,10 @@ const requestBatch = async (
       const detail = describeChoicesDetail(payload);
       logger.error('provider.response.unrecognized', { shape: describeResponseShape(payload), choices: detail });
       throw new TranslationServiceError(buildUnrecognizedMessage(payload, detail));
+    }
+    if (readFinishReason(payload) === 'length') {
+      logger.error('provider.response.truncated', { finishReason: 'length', batchSize: paragraphs.length });
+      throw new TranslationServiceError(TRUNCATED_MESSAGE);
     }
     logger.info('provider.request.success', { durationMs: Date.now() - startedAt, outputCharacters: extraction.content.length, isBatch: true });
     return extraction.content;
@@ -799,12 +881,12 @@ export const streamTranslateBatch = async (
   request: BatchTranslationRequest,
   handlers: StreamBatchHandlers,
   signal?: AbortSignal,
-): Promise<{ completedCount: number }> => {
+): Promise<{ completedCount: number; truncated: boolean }> => {
   if (!request.apiKey.trim()) throw new TranslationServiceError('请先在插件设置中填写 API Key。');
   if (!request.endpoint.trim()) throw new TranslationServiceError('请先填写 API Endpoint。');
   if (!request.model.trim()) throw new TranslationServiceError('请先填写模型名称。');
   const paragraphs = request.paragraphs;
-  if (paragraphs.length === 0) return { completedCount: 0 };
+  if (paragraphs.length === 0) return { completedCount: 0, truncated: false };
 
   const controller = new AbortController();
   const startedAt = Date.now();
@@ -815,6 +897,8 @@ export const streamTranslateBatch = async (
   const context = (request.pageContext ?? '').trim();
   const contextSuffix = context ? `Context for translation: ${context}` : '';
   const parser = createTagStreamParser(paragraphs.length);
+  // 最近一帧的 finish_reason：SSE 流与整段 JSON 回退两条路径共用（识别 length 截断）
+  let finishReason: string | null = null;
   logger.info('provider.stream.start', {
     url,
     model: request.model,
@@ -825,8 +909,26 @@ export const streamTranslateBatch = async (
     batchSize: paragraphs.length,
     hasContext: Boolean(context),
   });
-  const timeout = globalThis.setTimeout(() => controller.abort(), 30_000);
-  const abortFromCaller = (): void => controller.abort();
+  // 超时语义：等响应头阶段 30s 不变；进入流式读取后改为「空闲超时」——
+  // 连续 30s 收不到任何字节才中断，另设 5 分钟绝对上限防止挂死。
+  // 原实现是总时长 30s 硬顶，会把正在正常出字的流从中间掐断
+  // （已出段落保留、后续段落标失败），慢模型/思考型模型必然"翻一半断掉"。
+  const STREAM_IDLE_TIMEOUT_MS = 30_000;
+  const STREAM_MAX_DURATION_MS = 300_000;
+  let abortCause: 'idle' | 'total' | 'caller' | null = null;
+  let streamTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const armStreamTimeout = (ms: number): void => {
+    if (streamTimer !== undefined) globalThis.clearTimeout(streamTimer);
+    streamTimer = globalThis.setTimeout(() => {
+      abortCause = 'idle';
+      controller.abort();
+    }, ms);
+  };
+  armStreamTimeout(STREAM_IDLE_TIMEOUT_MS);
+  const abortFromCaller = (): void => {
+    abortCause = 'caller';
+    controller.abort();
+  };
   signal?.addEventListener('abort', abortFromCaller, { once: true });
 
   const dispatchEvents = (delta: string): void => {
@@ -837,7 +939,7 @@ export const streamTranslateBatch = async (
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -869,6 +971,8 @@ export const streamTranslateBatch = async (
     const contentType = response.headers.get('content-type') ?? '';
     if (!response.body || contentType.includes('application/json')) {
       logger.warn('provider.stream.fallback_json', { contentType, hasBody: Boolean(response.body) });
+      // 整段回退：读取整个响应体期间保持 5 分钟上限内的空闲计时
+      armStreamTimeout(STREAM_MAX_DURATION_MS - Math.max(0, Date.now() - startedAt));
       const bodyText = await response.text();
       const parsed = parseResponseBody(bodyText);
       if (parsed.mode === 'none') {
@@ -882,11 +986,12 @@ export const streamTranslateBatch = async (
         const detail = describeChoicesDetail(payload);
         throw new TranslationServiceError(buildUnrecognizedMessage(payload, detail));
       }
+      finishReason = finishReason ?? readFinishReason(payload);
       const translations = extractTaggedTranslations(extraction.content, paragraphs.length);
       for (let i = 0; i < translations.length; i += 1) {
         if (translations[i]) handlers.onParagraph(i, translations[i]);
       }
-      return { completedCount: translations.filter(Boolean).length };
+      return { completedCount: translations.filter(Boolean).length, truncated: finishReason === 'length' };
     }
 
     const reader = response.body.getReader();
@@ -899,6 +1004,11 @@ export const streamTranslateBatch = async (
       if (!data || data === '[DONE]') return;
       try {
         const json = JSON.parse(data) as Record<string, unknown>;
+        const choice = Array.isArray(json.choices) ? json.choices[0] : undefined;
+        if (choice && typeof choice === 'object') {
+          const reason = (choice as Record<string, unknown>).finish_reason;
+          if (typeof reason === 'string' && reason) finishReason = reason;
+        }
         const delta = extractStreamDelta(json);
         if (delta) dispatchEvents(delta);
       } catch {
@@ -909,6 +1019,12 @@ export const streamTranslateBatch = async (
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        armStreamTimeout(STREAM_IDLE_TIMEOUT_MS);
+        if (Date.now() - startedAt > STREAM_MAX_DURATION_MS) {
+          abortCause = 'total';
+          controller.abort();
+          continue;
+        }
         sseBuffer += decoder.decode(value, { stream: true });
         const lines = sseBuffer.split('\n');
         sseBuffer = lines.pop() ?? '';
@@ -921,20 +1037,27 @@ export const streamTranslateBatch = async (
     }
 
     const completedCount = parser.getCompletedCount();
+    const truncated = finishReason === 'length';
+    if (truncated) {
+      // finish_reason=length 且有未完成段落 = 静默截断的直接指纹
+      logger.warn('provider.stream.truncated', { durationMs: Date.now() - startedAt, completedCount, expected: paragraphs.length, model: request.model });
+    }
     logger.info('provider.stream.success', {
       durationMs: Date.now() - startedAt,
       completedCount,
       expected: paragraphs.length,
     });
-    return { completedCount };
+    return { completedCount, truncated };
   } catch (error) {
     logger.error('provider.stream.failure', { durationMs: Date.now() - startedAt, error });
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new TranslationServiceError('模型请求超过 30 秒仍未响应，请检查 Endpoint、网络或模型服务。');
+      if (abortCause === 'total') throw new TranslationServiceError('模型流式输出超过 5 分钟绝对上限，已中断。');
+      if (abortCause === 'idle') throw new TranslationServiceError('模型流式输出中断：连续 30 秒未收到新内容，请检查模型服务或更换 Endpoint。');
+      throw error;
     }
     throw error;
   } finally {
-    globalThis.clearTimeout(timeout);
+    if (streamTimer !== undefined) globalThis.clearTimeout(streamTimer);
     signal?.removeEventListener('abort', abortFromCaller);
   }
 };

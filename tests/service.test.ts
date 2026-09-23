@@ -15,6 +15,20 @@ describe('normalizeBaseUrl', () => {
   it('leaves a healthy base untouched', () => {
     expect(normalizeBaseUrl('https://api.openai.com/v1')).toBe('https://api.openai.com/v1');
   });
+
+  it('appends /v1 to a bare local Ollama base（官方示例常省略版本根，裸填会 404）', () => {
+    expect(normalizeBaseUrl('http://localhost:11434')).toBe('http://localhost:11434/v1');
+    expect(normalizeBaseUrl('http://127.0.0.1:11434')).toBe('http://127.0.0.1:11434/v1');
+    expect(normalizeBaseUrl('http://[::1]:11434')).toBe('http://[::1]:11434/v1');
+    expect(normalizeBaseUrl('http://localhost:11434/chat/completions')).toBe('http://localhost:11434/v1');
+  });
+
+  it('keeps local bases that already carry a version root or a custom path', () => {
+    expect(normalizeBaseUrl('http://localhost:11434/v1')).toBe('http://localhost:11434/v1');
+    expect(normalizeBaseUrl('http://localhost:11434/v2')).toBe('http://localhost:11434/v2');
+    expect(normalizeBaseUrl('http://localhost:11434/ollama-proxy')).toBe('http://localhost:11434/ollama-proxy');
+    expect(normalizeBaseUrl('http://localhost:8080')).toBe('http://localhost:8080');
+  });
 });
 
 describe('endpoint security validation', () => {
@@ -535,5 +549,83 @@ describe('streaming batch provider', () => {
       { ...baseRequest, paragraphs: ['Hello'] },
       { onPartial: () => undefined, onParagraph: () => undefined },
     )).rejects.toMatchObject({ name: 'TranslationServiceError', status: 401 });
+  });
+
+  it('flags truncation when the stream ends with finish_reason=length（截断指纹）', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: '<paragraph_1>你好</paragraph_1><paragraph_2>世' } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: '' }, finish_reason: 'length' }] })}\n\n`,
+      'data: [DONE]\n\n',
+    ])));
+
+    const result = await streamTranslateBatch(
+      { ...baseRequest, paragraphs: ['Hello', 'World'] },
+      { onPartial: () => undefined, onParagraph: () => undefined },
+    );
+    expect(result.completedCount).toBe(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('reports truncated=false on a healthy stop', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: '<paragraph_1>你好</paragraph_1>' } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: '' }, finish_reason: 'stop' }] })}\n\n`,
+      'data: [DONE]\n\n',
+    ])));
+
+    const result = await streamTranslateBatch(
+      { ...baseRequest, paragraphs: ['Hello'] },
+      { onPartial: () => undefined, onParagraph: () => undefined },
+    );
+    expect(result.truncated).toBe(false);
+  });
+});
+
+describe('truncation & retry guards', () => {
+  const singleRequest = {
+    endpoint: 'https://example.com/v1',
+    apiKey: 'test-key',
+    model: 'test-model',
+    targetLanguage: '简体中文',
+    text: 'Hello world',
+  };
+
+  const okBody = (content: string, finish = 'stop'): Response => new Response(
+    JSON.stringify({ choices: [{ finish_reason: finish, message: { content } }] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
+
+  it('throws an actionable error when non-empty output is cut by finish_reason=length（不再静默半截）', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okBody('<paragraph_1>你好世', 'length')));
+    await expect(translateWithOpenAICompatible(singleRequest)).rejects.toThrow(/finish_reason=length/);
+  });
+
+  it('retries a transient 503 once and succeeds', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('bad gateway', { status: 503 }))
+      .mockResolvedValueOnce(okBody('你好'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await translateWithOpenAICompatible(singleRequest);
+    expect(result).toBe('你好');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  }, 15_000);
+
+  it('does not retry 429（尊重限流，既有文案保持）', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('rate limited', { status: 429, headers: { 'Retry-After': '13' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(translateWithOpenAICompatible(singleRequest)).rejects.toThrow(/429/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry aborts（主动中断/超时不是可重试错误）', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(translateWithOpenAICompatible(singleRequest)).rejects.toThrow(/30 秒/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

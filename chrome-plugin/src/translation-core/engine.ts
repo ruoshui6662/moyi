@@ -1,4 +1,4 @@
-import { hasProtectedAncestor } from './dom';
+import { hasProtectedAncestor, isHardPruneElement } from './dom';
 import { isBlockElement, isCandidateContainer } from './layout';
 import { extractText, isMeaningfulText } from './text';
 import { captureElementTypography } from './typography';
@@ -14,11 +14,23 @@ const isVisible = (element: HTMLElement): boolean => {
 export const findTranslationCandidates = (
   root: HTMLElement = document.body,
   maxCandidates = 100,
+  /** 本会话已发现的候选：连同其子树一起跳过（其后代按原去重规则也永远不会是候选），
+   *  每次调用只返回「新」候选——长文滚动补扫靠它在同上限下逐步覆盖第 101+ 段。 */
+  known?: ReadonlySet<HTMLElement>,
 ): TranslationCandidate[] => {
   const candidates: TranslationCandidate[] = [];
   const seen = new Set<HTMLElement>();
   const ancestorSet = new Set<HTMLElement>();
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
+    // 硬剪枝子树整棵跳过（FILTER_REJECT），谓词与 hasProtectedAncestor 同源、行为等价：
+    // 这些元素的后代本来就要逐个判掉，现在直接跳过整棵子树，不再深入 SVG 等大子树
+    // 并对每个后代重复向上爬父链（原为 O(n·深度)，接近 O(n)）。
+    acceptNode: (node) => {
+      const element = node as Element;
+      if (known?.has(element as HTMLElement)) return NodeFilter.FILTER_REJECT;
+      return isHardPruneElement(element) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
+  });
   let node: Node | null;
 
   const markAncestors = (element: HTMLElement): void => {
