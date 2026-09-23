@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  describeOllamaAccessError,
   EXTENSION_BUILT_IN_PROVIDERS,
   OLLAMA_API_KEY_SENTINEL,
   OLLAMA_DEFAULT_ENDPOINT,
@@ -62,11 +63,44 @@ describe('Ollama extension provider', () => {
       model: 'llama3.2',
     });
     expect(prepared.apiKey).toBe(OLLAMA_API_KEY_SENTINEL);
+    expect(prepared.endpoint).toBe(OLLAMA_DEFAULT_ENDPOINT);
+    expect(prepared.model).toBe('llama3.2');
     expect(prepareExtensionProviderConfig({
       providerId: 'openai',
       apiKey: '',
       endpoint: 'https://api.openai.com/v1',
       model: 'gpt-4o-mini',
     }).apiKey).toBe('');
+  });
+
+  it('backfills endpoint/model from the stored entry or the official default', () => {
+    // 共享读取链对 providers 条目缺 endpoint 的投影是空串，请求组装必须兜底
+    const config = {
+      providerId: OLLAMA_PROVIDER_ID,
+      apiKey: '',
+      endpoint: '',
+      model: '',
+      providers: {
+        [OLLAMA_PROVIDER_ID]: { apiKey: '', endpoint: 'http://localhost:11434/v1', model: 'qwen3:8b' },
+      },
+    };
+    const prepared = prepareExtensionProviderConfig(config);
+    expect(prepared.endpoint).toBe('http://localhost:11434/v1');
+    expect(prepared.model).toBe('qwen3:8b');
+
+    const bare = prepareExtensionProviderConfig({
+      ...config,
+      providers: { [OLLAMA_PROVIDER_ID]: { apiKey: '', model: 'm' } },
+    });
+    expect(bare.endpoint).toBe(OLLAMA_DEFAULT_ENDPOINT);
+    expect(bare.model).toBe('m');
+  });
+
+  it('describes the 403 origin rejection with an actionable OLLAMA_ORIGINS hint', () => {
+    const hint = describeOllamaAccessError(OLLAMA_PROVIDER_ID, '翻译服务请求失败 (403)：Forbidden', 'abcdef');
+    expect(hint).toContain('翻译服务请求失败 (403)');
+    expect(hint).toContain('OLLAMA_ORIGINS=chrome-extension://abcdef/*');
+    expect(describeOllamaAccessError('openai', '失败 (403)', 'abcdef')).toBe('失败 (403)');
+    expect(describeOllamaAccessError(OLLAMA_PROVIDER_ID, '翻译服务请求失败 (500)：boom', 'abcdef')).toBe('翻译服务请求失败 (500)：boom');
   });
 });

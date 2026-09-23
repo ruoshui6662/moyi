@@ -3,7 +3,7 @@ import { completeWithOpenAICompatible } from '../service/common';
 import { getMtAdapter, type MtTranslationRequest } from '../service/mt';
 import { SEGMENTATION_SYSTEM_PROMPT } from '../utils/subtitles/ai-segmenter';
 import { getProviderMeta, isMtProviderId, isNoKeyMtProviderId, parseModelsPayload, resolveProviderSettings } from '../utils/providers';
-import { isOllamaProviderId, prepareExtensionProviderConfig, prepareExtensionRequestApiKey } from '../utils/extensionProviders';
+import { describeOllamaAccessError, isOllamaProviderId, prepareExtensionProviderConfig, prepareExtensionRequestApiKey } from '../utils/extensionProviders';
 import { getConfig, type TranslatorConfig } from '../utils/config';
 import { logger } from '../utils/logger';
 
@@ -129,11 +129,13 @@ export default defineBackground(() => {
       const safeContext = sanitizePageContext(pageContext);
       void (async () => {
         abortController = new AbortController();
+        let providerId = '';
         try {
           const config = await getConfig();
+          providerId = config.providerId;
           const requestConfig = prepareExtensionProviderConfig(config);
           logger.info('background.stream_translation.start', { paragraphCount: safeParagraphs.length, model: requestConfig.model });
-          const { completedCount } = await streamTranslateBatch(
+          const { completedCount, truncated } = await streamTranslateBatch(
             { ...requestConfig, paragraphs: safeParagraphs, pageContext: safeContext },
             {
               onPartial: (index, text) => send({ type: 'partial', index, text }),
@@ -141,11 +143,12 @@ export default defineBackground(() => {
             },
             abortController.signal,
           );
-          logger.info('background.stream_translation.success', { paragraphCount: paragraphs.length, completedCount });
-          send({ type: 'done', completedCount });
+          logger.info('background.stream_translation.success', { paragraphCount: paragraphs.length, completedCount, truncated });
+          send({ type: 'done', completedCount, truncated });
         } catch (error) {
           logger.error('background.stream_translation.failure', { error });
-          send({ type: 'error', error: error instanceof Error ? error.message : '流式翻译失败。' });
+          const message = error instanceof Error ? error.message : '流式翻译失败。';
+          send({ type: 'error', error: describeOllamaAccessError(providerId, message, chrome.runtime.id) });
         }
       })();
     });
@@ -158,6 +161,8 @@ export default defineBackground(() => {
 
     logger.info('background.message.received', { type });
     void (async () => {
+      // 错误提示需要知道当前服务商（Ollama 的 403 有定向指引），逐分支登记
+      let activeProviderId = '';
       try {
         if (type === 'page-command') {
           if (!isExtensionPageSender(sender)) throw new Error('该操作仅允许从扩展页面发起。');
@@ -172,7 +177,8 @@ export default defineBackground(() => {
         const config = await getConfig();
         if (type === 'fetch-models') {
           if (!isExtensionPageSender(sender)) throw new Error('该操作仅允许从扩展页面发起。');
-          const { endpoint, apiKey, kind } = message as { type: 'fetch-models'; endpoint: string; apiKey: string; kind?: string };
+          const { endpoint, apiKey, kind, providerId } = message as { type: 'fetch-models'; endpoint: string; apiKey: string; kind?: string; providerId?: string };
+          activeProviderId = typeof providerId === 'string' ? providerId : '';
           if (kind === 'mt') throw new Error('该服务商无需模型列表（传统翻译 API 无模型）。');
           if (!endpoint?.trim()) throw new Error('请先填写接口地址。');
           validateEndpointUrl(endpoint);
@@ -197,6 +203,7 @@ if (type === 'test-connection') {
           // 只使用消息中显式传入的值，绝不回退到已保存 Key——否则任意扩展上下文
           // 可用一条消息把用户的真实 Key 发往自己指定的 endpoint。
           const overrides = message as { endpoint?: string; apiKey?: string; apiSecret?: string; region?: string; model?: string; kind?: string; providerId?: string };
+          activeProviderId = overrides.providerId ?? '';
           const endpoint = overrides.endpoint?.trim() ?? '';
           const apiKey = overrides.apiKey?.trim() ?? '';
           const model = overrides.model?.trim() ?? '';
@@ -237,6 +244,7 @@ if (type === 'test-connection') {
         }
 
         if (type === 'translate-batch') {
+          activeProviderId = config.providerId;
           const { paragraphs, maxBatchSize, pageContext } = message as { type: 'translate-batch'; paragraphs: string[]; maxBatchSize?: number; pageContext?: string };
           const safeParagraphs = sanitizeParagraphs(paragraphs);
           const safeContext = sanitizePageContext(pageContext);
@@ -257,6 +265,7 @@ if (type === 'test-connection') {
         }
 
         if (type === 'segment-subtitles') {
+          activeProviderId = config.providerId;
           // AI 字幕断句：语言无关，仅要求 OpenAI 兼容服务商；DeepL 直接声明不支持
           const { jsonChunks } = message as { type: 'segment-subtitles'; jsonChunks?: unknown };
           if (
@@ -292,6 +301,7 @@ if (type === 'test-connection') {
         }
 
         const { text } = message as { type: 'translate'; text: string };
+        activeProviderId = config.providerId;
         if (typeof text !== 'string' || !text.trim()) throw new Error('翻译内容为空。');
         const safeText = text.slice(0, MAX_PARAGRAPH_CHARS);
         logger.info('background.translation.start', { inputCharacters: safeText.length, model: config.model });
@@ -309,7 +319,8 @@ if (isMtBackend(config)) {
         sendResponse({ ok: true, translation });
       } catch (error) {
         logger.error('background.message.failure', { type, error });
-        sendResponse({ ok: false, error: error instanceof Error ? error.message : '操作失败。' });
+        const errorText = error instanceof Error ? error.message : '操作失败。';
+        sendResponse({ ok: false, error: describeOllamaAccessError(activeProviderId, errorText, chrome.runtime.id) });
       }
     })();
 

@@ -126,13 +126,42 @@ export const activateExtensionConfiguredProvider = <T extends {
 };
 
 /**
- * 适配现有 OpenAI 客户端的必填 apiKey 合同。
- * 占位值只存在于后台本次请求对象中，绝不保存到 chrome.storage。
+ * 组装后台请求配置。
+ * Ollama 需要两件适配：① 共享读取链（getConfig 的投影）不感知扩展专属默认端点，
+ * providers 条目缺 endpoint 时顶层投影为空串——这里从 providers 表重新解析并兜底默认值；
+ * ② 无密码哨兵 Key 适配 OpenAI 客户端的必填合同。哨兵只存在于本次请求对象，绝不写回存储。
+ * 其余服务商原样透传。
  */
-export const prepareExtensionProviderConfig = <T extends { providerId: string; apiKey: string }>(config: T): T =>
-  isOllamaProviderId(config.providerId) && !config.apiKey.trim()
-    ? { ...config, apiKey: OLLAMA_API_KEY_SENTINEL }
-    : config;
+export const prepareExtensionProviderConfig = <T extends {
+  providerId: string;
+  apiKey: string;
+  endpoint?: string;
+  model?: string;
+  providers?: Record<string, ProviderSettings>;
+}>(config: T): T => {
+  if (!isOllamaProviderId(config.providerId)) return config;
+  const runtime = resolveExtensionProviderSettings(config, config.providerId);
+  return {
+    ...config,
+    apiKey: OLLAMA_API_KEY_SENTINEL,
+    endpoint: runtime.endpoint || OLLAMA_DEFAULT_ENDPOINT,
+    model: runtime.model || config.model || '',
+  };
+};
 
 export const prepareExtensionRequestApiKey = (providerId: string, apiKey: string): string =>
   isOllamaProviderId(providerId) && !apiKey.trim() ? OLLAMA_API_KEY_SENTINEL : apiKey;
+
+/**
+ * Ollama 专属错误提示：本地服务的默认来源白名单不含扩展来源，403 时
+ * 给出可操作的 OLLAMA_ORIGINS 配置指引；其余错误原样透传。
+ */
+export const describeOllamaAccessError = (
+  providerId: string,
+  message: string,
+  extensionId: string,
+): string => {
+  if (!isOllamaProviderId(providerId) || !/\b403\b|forbidden/i.test(message)) return message;
+  return `${message} 提示：Ollama 拒绝了扩展的访问来源（403），请在启动 Ollama 前设置 `
+    + `OLLAMA_ORIGINS=chrome-extension://${extensionId}/* 放行扩展来源，然后重启 Ollama 再试。`;
+};
