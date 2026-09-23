@@ -27,6 +27,6 @@ export const OVERLAY_TOKENS_CSS = `
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 `;
 
-/** 叠加型 UI 统一字体栈（与 tokens.css 的 --font-body 同源，去掉平台专属前缀）。 */
+/** 叠加型 UI 统一字体栈（与 tokens.css 的 --font-body 同源：仅开源可商用字体名）。 */
 export const OVERLAY_FONT_STACK =
-  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif";
+  "'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', Inter, Roboto, 'DejaVu Sans', sans-serif";

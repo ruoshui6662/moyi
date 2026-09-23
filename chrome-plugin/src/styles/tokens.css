@@ -71,13 +71,15 @@
   --space-8: 32px;
   --space-10: 40px;
 
-  /* ── 字体（开源可商用字体名优先，不加载 webfont） ── */
-  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC',
-    'Source Han Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --font-display: 'LXGW WenKai', 'LXGW WenKai GB', 'Kaiti SC', 'STKaiti', 'KaiTi',
+  /* ── 字体（仅列开源可商用字体名，不引用任何专有系统字体；回退到通用族） ──
+     Noto Sans SC / Source Han Sans SC / Noto Serif SC（思源系列，SIL OFL）
+     霞鹜文楷 LXGW WenKai（SIL OFL）、Inter / Roboto（Apache-2.0）、
+     Source Code Pro（SIL OFL）、JetBrains Mono（SIL OFL）、DejaVu（自由许可）。 */
+  --font-body: 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
+    Inter, Roboto, 'DejaVu Sans', sans-serif;
+  --font-display: 'LXGW WenKai', 'LXGW WenKai GB',
     'Noto Serif SC', 'Source Han Serif SC', serif;
-  --font-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Consolas,
-    'Noto Sans Mono CJK SC', monospace;
+  --font-mono: 'Source Code Pro', 'JetBrains Mono', 'DejaVu Sans Mono', monospace;
 
   /* ── 动效 ── */
   --duration-fast: 120ms;

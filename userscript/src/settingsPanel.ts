@@ -117,7 +117,7 @@ let activeTab = 'service';
 
 const PANEL_CSS = `
   :host { all: initial; }
-  * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; }
+  * { box-sizing: border-box; font-family: 'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', Inter, Roboto, 'DejaVu Sans', sans-serif; }
   /* 设计 token：与扩展端 styles/tokens.css 同源（Apple 系统蓝 accent + 灰阶 + 圆角刻度 + 动效）。
      油猴端无构建期 CSS 注入，故在此镜像同一组取值；改一处必须同步另一处。 */
   :host {
@@ -133,7 +133,7 @@ const PANEL_CSS = `
     --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
     --shadow-lg: 0 12px 36px rgba(0,0,0,0.14);
     --focus-ring: 0 0 0 3px rgba(0,122,255,0.3);
-    --font-display: 'LXGW WenKai', 'LXGW WenKai GB', 'Kaiti SC', 'STKaiti', 'KaiTi', 'Noto Serif SC', 'Source Han Serif SC', serif;
+    --font-display: 'LXGW WenKai', 'LXGW WenKai GB', 'Noto Serif SC', 'Source Han Serif SC', serif;
     --transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
   @media (prefers-color-scheme: dark) {
