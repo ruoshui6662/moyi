@@ -1,0 +1,164 @@
+/**
+ * 墨译设计 token — 唯一事实来源（扩展端）
+ *
+ * 依据 Apple Human Interface Guidelines（Clarity / Deference / Depth + Foundations）；
+ * 详细推导见 `规划/UI重构-Apple设计规范对照设计规划.md`。
+ *
+ * 契约：
+ * - 强调色为 Apple 系统蓝；浅深两套成对定义，组件不得写死颜色；
+ * - 字体全部为开源可商用字体名（Noto/Source Han 系、霞鹜文楷，均 SIL OFL），
+ *   不加载任何 CDN webfont，全部走本机字体栈；
+ * - 尺寸只用 4px 网格与 6/8/12/16/20 圆角刻度；
+ * - 动效只用 3 档时长 + 2 条缓动，且必须可被「减弱动态效果」关闭；
+ * - 叠加型 UI（悬浮钮/字幕）使用独立的 --overlay-* 固定深色组，
+ *   其 TS 镜像在 `src/styles/overlayTokens.ts`，两者由测试守护一致性。
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ── 色彩：语义命名，浅色 ── */
+  --color-canvas: #f5f5f7;
+  --color-surface: #ffffff;
+  --color-surface-2: #f2f2f4;
+  --color-surface-3: #e8e8ed;
+
+  --color-label: #1d1d1f;
+  --color-label-2: #515154;
+  --color-label-3: #6e6e73;
+  --color-label-disabled: #aeaeb2;
+
+  --color-border: #d2d2d7;
+  --color-border-strong: #b4b4bb;
+  --color-separator: rgba(0, 0, 0, 0.1);
+
+  --color-accent: #007aff;
+  --color-accent-hover: #0071e3;
+  --color-accent-active: #0062cc;
+  --color-accent-tint: rgba(0, 122, 255, 0.1);
+  --color-accent-tint-strong: rgba(0, 122, 255, 0.18);
+  --color-on-accent: #ffffff;
+
+  --color-success: #1f7a4d;
+  --color-success-tint: rgba(31, 122, 77, 0.1);
+  --color-danger: #b23b31;
+  --color-danger-tint: rgba(178, 59, 49, 0.1);
+
+  --color-fill: rgba(120, 120, 128, 0.08);
+  --color-fill-strong: rgba(120, 120, 128, 0.16);
+  --color-toast-bg: #1d1d1f;
+  --color-toast-label: #f5f5f7;
+
+  /* ── 圆角 ── */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /* ── 阴影（层级） ── */
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --shadow-3: 0 12px 36px rgba(0, 0, 0, 0.14);
+
+  /* ── 间距（4px 网格） ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* ── 字体（开源可商用字体名优先，不加载 webfont） ── */
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC',
+    'Source Han Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-display: 'LXGW WenKai', 'LXGW WenKai GB', 'Kaiti SC', 'STKaiti', 'KaiTi',
+    'Noto Serif SC', 'Source Han Serif SC', serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Consolas,
+    'Noto Sans Mono CJK SC', monospace;
+
+  /* ── 动效 ── */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ── 焦点与层级 ── */
+  --focus-ring: 0 0 0 3px rgba(0, 122, 255, 0.35);
+  --focus-ring-inset: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-accent);
+  --z-sticky: 10;
+  --z-overlay: 100;
+  --z-modal: 900;
+  --z-toast: 1000;
+
+  /* ── 叠加型 UI（悬浮钮 / 字幕）：固定深色，不随浅深模式切换 ── */
+  --overlay-surface: rgba(17, 17, 20, 0.94);
+  --overlay-surface-solid: #17171a;
+  --overlay-border: rgba(255, 255, 255, 0.14);
+  --overlay-label: #f2f2f4;
+  --overlay-label-2: #b9b9c0;
+  --overlay-success: #12a35f;
+  --overlay-danger: #ff6b5e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-canvas: #1c1c1e;
+    --color-surface: #2c2c2e;
+    --color-surface-2: #3a3a3c;
+    --color-surface-3: #48484a;
+
+    --color-label: #f5f5f7;
+    --color-label-2: #c7c7cc;
+    --color-label-3: #a1a1a6;
+    --color-label-disabled: #636366;
+
+    --color-border: rgba(255, 255, 255, 0.16);
+    --color-border-strong: rgba(255, 255, 255, 0.3);
+    --color-separator: rgba(255, 255, 255, 0.12);
+
+    --color-accent: #0a84ff;
+    --color-accent-hover: #3a9bff;
+    --color-accent-active: #66b2ff;
+    --color-accent-tint: rgba(10, 132, 255, 0.18);
+    --color-accent-tint-strong: rgba(10, 132, 255, 0.3);
+    --color-on-accent: #ffffff;
+
+    --color-success: #30d158;
+    --color-success-tint: rgba(48, 209, 88, 0.16);
+    --color-danger: #ff6961;
+    --color-danger-tint: rgba(255, 105, 97, 0.16);
+
+    --color-fill: rgba(120, 120, 128, 0.24);
+    --color-fill-strong: rgba(120, 120, 128, 0.36);
+    --color-toast-bg: #f5f5f7;
+    --color-toast-label: #1d1d1f;
+
+    --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --shadow-3: 0 12px 36px rgba(0, 0, 0, 0.5);
+
+    --focus-ring: 0 0 0 3px rgba(10, 132, 255, 0.45);
+  }
+}
+
+/* 统一焦点环：所有可交互元素键盘聚焦必须可见 */
+:where(button, a, input, select, textarea, [tabindex], kbd[role='button']):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* 减弱动态效果：全局关停过渡与动画 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

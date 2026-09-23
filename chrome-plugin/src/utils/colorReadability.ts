@@ -50,6 +50,14 @@ const lightenRgb = (rgb: RgbColor, targetL: number): RgbColor => {
   };
 };
 
+/** 向黑色方向插值（浅背景上提高对比度的正确方向：提亮只会更糊）。 */
+const darkenRgb = (rgb: RgbColor, targetL: number): RgbColor => {
+  const currentL = rgbToHslL(rgb);
+  if (currentL <= targetL) return rgb;
+  const t = (currentL - targetL) / currentL;
+  return { r: rgb.r * (1 - t), g: rgb.g * (1 - t), b: rgb.b * (1 - t) };
+};
+
 /** WCAG 相对亮度（0 黑 ~ 1 白）。 */
 export const relativeLuminance = (rgb: RgbColor): number => {
   const channel = (value: number): number => {
@@ -78,22 +86,25 @@ export const contrastFromLuminance = (lum1: number, lum2: number): number => {
 };
 
 /**
- * 解析可读译文颜色：
+ * 解析可读译文颜色：目标是对比度达标（WCAG AA 正文 4.5:1），而非固定阈值。
  *   - 无背景信息 → 原样返回用户配置色；
- *   - 暗背景（luminance < DARK_BG_LUMINANCE）→ 在用户色基础上向白色提亮，
- *     直到与背景的对比度达到 TARGET_CONTRAST（保证深色网页白字场景可见）；
- *   - 亮背景 → 用户配置色原样（默认色已可读）。
+ *   - 已达标 → 用户配置色原样（绝大多数浅底页面走这条路径，视觉零变化）；
+ *   - 未达标 → 朝「远离背景亮度」的一侧推进：暗背景提亮、浅/中浅背景压暗。
+ *     中浅灰背景（亮度 0.35–0.6）上深色译文会掉到 4.5:1 以下，提亮只会更糊，
+ *     必须压暗——这是旧的「暗背景才处理」阈值模型漏掉的区间。
  */
 export const resolveReadableColor = (userColor: string, bgLuminance: number | null | undefined): string => {
   const user = hexToRgb(userColor);
   if (!user || bgLuminance === null || bgLuminance === undefined) return userColor;
-  if (bgLuminance < DARK_BG_LUMINANCE) {
-    let adjusted = lightenRgb(user, 0.72);
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      if (contrastFromLuminance(relativeLuminance(adjusted), bgLuminance) >= TARGET_CONTRAST) break;
-      adjusted = lightenRgb(adjusted, 0.72 + (attempt + 1) * 0.08);
-    }
-    return rgbToHex(adjusted);
+  if (contrastFromLuminance(relativeLuminance(user), bgLuminance) >= TARGET_CONTRAST) return userColor;
+
+  const backgroundIsLight = bgLuminance >= DARK_BG_LUMINANCE;
+  let adjusted = user;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    adjusted = backgroundIsLight
+      ? darkenRgb(user, Math.max(0, 0.5 - attempt * 0.06))
+      : lightenRgb(user, Math.min(1, 0.72 + attempt * 0.04));
+    if (contrastFromLuminance(relativeLuminance(adjusted), bgLuminance) >= TARGET_CONTRAST) break;
   }
-  return userColor;
+  return rgbToHex(adjusted);
 };

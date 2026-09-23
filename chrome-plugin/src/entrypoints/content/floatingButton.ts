@@ -24,6 +24,7 @@
  */
 
 import { FLOAT_LOGO_DATA_URI } from './floatLogo';
+import { OVERLAY_TOKENS_CSS } from '../../styles/overlayTokens';
 
 export const FLOAT_HOST_ID = 'moyi-float-control';
 export const FLOAT_POSITION_KEY = 'moyi-float-position';
@@ -36,9 +37,10 @@ const DRAG_THRESHOLD_PX = 4;
 export const FLOAT_SIZE_DEFAULT = 32;
 export const FLOAT_SIZE_MIN = 26;
 export const FLOAT_SIZE_MAX = 48;
-/** 闲置态不透明度缺省值；交互（悬停/按下）时自动全显，保证操作瞬间清晰。 */
+/** 闲置态不透明度缺省值；交互（悬停/按下）时自动全显，保证操作瞬间清晰。
+ *  下限 0.4（原 0.15）：更低时按钮在多数页面上对比不足 3:1，近乎不可见（Apple HIG 可发现性）。 */
 export const FLOAT_OPACITY_DEFAULT = 0.9;
-export const FLOAT_OPACITY_MIN = 0.15;
+export const FLOAT_OPACITY_MIN = 0.4;
 export const FLOAT_OPACITY_MAX = 1;
 /** 吸附停靠时胶囊宽度（贴边、始终可见）。 */
 const DOCK_SIZE = 24;
@@ -80,7 +82,7 @@ const DEFAULT_GAP = 16;
 
 const buildShadowMarkup = (): string => `
   <style>
-    :host { all: initial; }
+    :host { all: initial; ${OVERLAY_TOKENS_CSS} }
     .fab {
       position: fixed;
       left: ${DEFAULT_GAP}px;
@@ -93,7 +95,7 @@ const buildShadowMarkup = (): string => `
       padding: 0;
       border: 1px solid rgba(255, 255, 255, 0.16);
       border-radius: 50%;
-      background: #17171a;
+      background: var(--overlay-surface-solid);
       /* 悬浮阴影：贴地接触阴影 + 环境扩散阴影，形成浮起感；悬停加深 */
       box-shadow:
         0 2px 5px -2px rgba(0, 0, 0, 0.28),
@@ -104,13 +106,18 @@ const buildShadowMarkup = (): string => `
       touch-action: none;
       /* 初始不可见：先按默认位挂载、异步恢复存储位置后再淡入，避免「默认位闪现」 */
       opacity: 0;
-      transition: width 0.18s ease, border-radius 0.18s ease, opacity 0.22s ease, box-shadow 0.18s ease;
+      transition: width var(--duration-base) var(--ease-standard), border-radius var(--duration-base) var(--ease-standard), opacity var(--duration-base) var(--ease-standard), box-shadow var(--duration-base) var(--ease-standard);
     }
     .fab.ready { opacity: var(--moyi-fab-opacity, 0.9); }
     .fab:active { cursor: grabbing; }
     /* 交互瞬间全显：半透明只为阅读时不碍眼，操作时刻必须清晰 */
     .fab:hover,
     .fab:active { opacity: 1; }
+    /* 键盘可达：按钮是原生 <button>，焦点环必须可见 */
+    .fab:focus-visible {
+      outline: 2px solid var(--color-accent, #0a84ff);
+      outline-offset: 2px;
+    }
     .fab:hover { box-shadow: 0 4px 9px -3px rgba(0, 0, 0, 0.3), 0 18px 34px -12px rgba(0, 0, 0, 0.5); }
     /* 品牌 logo：随容器形状裁切（正圆 ↔ 吸附胶囊），cover 保证吸附变窄时不拉伸变形 */
     .logo {
@@ -132,13 +139,14 @@ const buildShadowMarkup = (): string => `
       display: grid;
       place-items: center;
       border-radius: 50%;
-      background: #17b26a;
+      background: var(--overlay-success);
       box-shadow:
         0 0 0 2px rgba(255, 255, 255, 0.92),
         0 1px 3px rgba(0, 0, 0, 0.35);
       opacity: 0;
       transform: scale(0.4);
-      transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+      /* 回弹曲线是全项目唯一标注例外（Apple HIG：状态徽章允许弹性反馈） */
+      transition: opacity var(--duration-fast) var(--ease-standard), transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
       pointer-events: none;
     }
     .badge svg { width: 9px; height: 9px; display: block; }
@@ -147,7 +155,7 @@ const buildShadowMarkup = (): string => `
     .fab.docked-left,
     .fab.docked-right {
       width: ${DOCK_SIZE}px;
-      border-radius: 10px;
+      border-radius: var(--overlay-radius-md);
       cursor: pointer;
     }
     /* 悬停展开为完整按钮 */
@@ -185,6 +193,10 @@ const buildShadowMarkup = (): string => `
     }
     @media print {
       .fab { display: none !important; }
+    }
+    /* 减弱动态效果：document 级样式表够不到 closed shadow，这里自行关停 */
+    @media (prefers-reduced-motion: reduce) {
+      .fab, .fab * { transition: none !important; animation: none !important; }
     }
   </style>
   <button class="fab" type="button" aria-label="翻译当前页" title="翻译当前页">
@@ -330,6 +342,9 @@ export const mountFloatingButton = (options: FloatingButtonOptions): (() => void
   // 长按手势：仅当宿主提供 onLongPress 时启用；移动或提前松开即取消
   let pressTimer: number | undefined;
   let longPressFired = false;
+  // 指针路径已在 pointerup 内决定「翻译/拖拽/长按」，原生 click 会随后触发，
+  // 必须抑制，否则键盘 Enter/Space（只走 click）之外的指针点击会双触发。
+  let suppressClick = false;
 
   const cancelLongPress = (): void => {
     if (pressTimer !== undefined) {
@@ -340,6 +355,7 @@ export const mountFloatingButton = (options: FloatingButtonOptions): (() => void
 
   const onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) return;
+    suppressClick = false;
     dragging = true;
     dragged = false;
     startX = event.clientX;
@@ -382,6 +398,7 @@ export const mountFloatingButton = (options: FloatingButtonOptions): (() => void
   const onPointerUp = (event: PointerEvent): void => {
     if (!dragging) return;
     dragging = false;
+    suppressClick = true;
     cancelLongPress();
     if (typeof fab.hasPointerCapture === 'function' && fab.hasPointerCapture(event.pointerId)) {
       fab.releasePointerCapture(event.pointerId);
@@ -409,9 +426,20 @@ export const mountFloatingButton = (options: FloatingButtonOptions): (() => void
     void options.onToggle();
   };
 
+  // 键盘可达：Enter/Space 在原生 button 上只派发 click（不走 pointer 事件）。
+  // 指针点击已在 pointerup 处理并置 suppressClick，这里只补键盘路径。
+  const onClick = (): void => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    void options.onToggle();
+  };
+
   fab.addEventListener('pointerdown', onPointerDown);
   fab.addEventListener('pointermove', onPointerMove);
   fab.addEventListener('pointerup', onPointerUp);
+  fab.addEventListener('click', onClick);
 
   // 恢复持久化位置与吸附状态（y 为 top 坐标），完成后淡入按钮。
   // 先按默认位挂载、恢复完统一 .ready，杜绝「左上角闪现→跳到存储位」的跳变。
@@ -439,6 +467,7 @@ export const mountFloatingButton = (options: FloatingButtonOptions): (() => void
     fab.removeEventListener('pointerdown', onPointerDown);
     fab.removeEventListener('pointermove', onPointerMove);
     fab.removeEventListener('pointerup', onPointerUp);
+    fab.removeEventListener('click', onClick);
     host.remove();
   };
 };

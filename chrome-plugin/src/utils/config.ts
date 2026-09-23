@@ -22,11 +22,12 @@ export const TRANSLATION_FONT_SCALE_MIN = 0.8;
 export const TRANSLATION_FONT_SCALE_MAX = 1.15;
 export const TRANSLATION_FONT_SCALE_STEP = 0.01;
 
-/** 悬浮按钮外观的唯一合同：触控可用下限之上、尽量少遮挡。 */
+/** 悬浮按钮外观的唯一合同：触控可用下限之上、尽量少遮挡。
+ *  不透明度下限 0.4：更低时按钮在多数页面背景上对比不足 3:1，近乎不可发现。 */
 export const FLOAT_SIZE_MIN = 26;
 export const FLOAT_SIZE_MAX = 48;
 export const FLOAT_SIZE_DEFAULT = 32;
-export const FLOAT_OPACITY_MIN = 0.15;
+export const FLOAT_OPACITY_MIN = 0.4;
 export const FLOAT_OPACITY_MAX = 1;
 export const FLOAT_OPACITY_DEFAULT = 0.9;
 

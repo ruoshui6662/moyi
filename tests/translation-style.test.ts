@@ -36,9 +36,9 @@ describe('buildTranslationCss', () => {
     expect(css).not.toContain('border-inline-start');
   });
 
-  it('highlight preset renders cool moon-white block', () => {
+  it('highlight preset renders cool moon-white block（底色需在白页上可辨，非近白）', () => {
     const css = buildTranslationCss({ ...DEFAULT_TRANSLATION_THEME, preset: 'highlight' });
-    expect(css).toContain('background: rgba(226, 238, 241, 0.9)');
+    expect(css).toContain('background: rgba(189, 216, 228, 0.9)');
   });
 
   it('replace preset carries no marker decoration and keeps original wrapper hidden', () => {
@@ -67,7 +67,7 @@ describe('buildTranslationCss', () => {
     const css = buildTranslationCss({ preset: 'highlight', color: '#000000', fontScale: 1, fontFamily: '', lineHeight: 0, letterSpacing: 0 });
     expect(css).toContain('@keyframes personal-translator-fade-in');
     expect(css).toContain('animation: personal-translator-fade-in');
-    expect(css).toContain('color: #b03a2e');
+    expect(css).toContain('color: #b23b31');
   });
 
   it('uses logical properties for markers and drops physical axis animation', () => {

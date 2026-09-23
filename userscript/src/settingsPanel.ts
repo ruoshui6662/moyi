@@ -28,6 +28,7 @@ import {
   sanitizeTranslationLineHeight,
   sanitizeTranslationStylePreset,
   TRANSLATION_STYLE_PRESETS,
+  type TranslationStylePreset,
   type TranslatorConfig,
 } from '../../chrome-plugin/src/utils/config';
 import { PROMPT_STYLES, sanitizePromptStyle } from '../../chrome-plugin/src/utils/prompts';
@@ -36,6 +37,8 @@ import { clearTranslationCache } from '../../chrome-plugin/src/entrypoints/conte
 import { FLOAT_LOGO_DATA_URI } from '../../chrome-plugin/src/entrypoints/content/floatLogo';
 import { resolveReadableColor } from '../../chrome-plugin/src/utils/colorReadability';
 import { captureElementTypography, computeTranslationTypography } from '../../chrome-plugin/src/translation-core/typography';
+// marker 装饰规则与真实渲染同源导出：预览不再手写第二套（防漂移）
+import { buildMarkerRules } from '../../chrome-plugin/src/entrypoints/content/translationRenderer';
 import {
   BUILT_IN_PROVIDERS,
   createCustomProviderId,
@@ -114,18 +117,41 @@ let activeTab = 'service';
 
 const PANEL_CSS = `
   :host { all: initial; }
-  * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; }
-  /* 设计 token（手册 v1.0：黑 accent + 灰阶 + 圆角 + 阴影 + 动效） */
+  * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; }
+  /* 设计 token：与扩展端 styles/tokens.css 同源（Apple 系统蓝 accent + 灰阶 + 圆角刻度 + 动效）。
+     油猴端无构建期 CSS 注入，故在此镜像同一组取值；改一处必须同步另一处。 */
   :host {
-    --bg-page: #f5f5f7; --card: #ffffff; --surface-2: #f7f7f8; --surface-3: #f0f0f1;
-    --text: #111111; --text-2: #555555; --text-3: #999999; --text-disabled: #b8b8bd;
-    --border: #e5e5e7; --border-hover: #d1d1d6;
-    --accent: #000000; --accent-hover: #1a1a1a; --accent-soft: rgba(0,0,0,0.08);
-    --green: #34c759; --danger: #c45c48;
-    --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
-    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04); --shadow-md: 0 4px 20px rgba(0,0,0,0.06);
-    --font-display: 'LXGW WenKai', 'Kaiti SC', 'KaiTi', 'STKaiti', 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
-    --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    --bg-page: #f5f5f7; --card: #ffffff; --surface-2: #f2f2f4; --surface-3: #e8e8ed;
+    --text: #1d1d1f; --text-2: #515154; --text-3: #6e6e73; --text-disabled: #aeaeb2;
+    --border: #d2d2d7; --border-hover: #b4b4bb;
+    /* 结构分隔线比控件描边更浅：同一色调会让顶部/区块之间显得脏（与 tokens.css 的 separator 同源） */
+    --separator: rgba(0,0,0,0.1);
+    --accent: #007aff; --accent-hover: #0071e3; --accent-soft: rgba(0,122,255,0.1);
+    --green: #1f7a4d; --danger: #b23b31;
+    --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-xl: 20px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+    --shadow-lg: 0 12px 36px rgba(0,0,0,0.14);
+    --focus-ring: 0 0 0 3px rgba(0,122,255,0.3);
+    --font-display: 'LXGW WenKai', 'LXGW WenKai GB', 'Kaiti SC', 'STKaiti', 'KaiTi', 'Noto Serif SC', 'Source Han Serif SC', serif;
+    --transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :host {
+      --bg-page: #1c1c1e; --card: #2c2c2e; --surface-2: #3a3a3c; --surface-3: #48484a;
+      --text: #f5f5f7; --text-2: #c7c7cc; --text-3: #a1a1a6; --text-disabled: #636366;
+      --border: rgba(255,255,255,0.16); --border-hover: rgba(255,255,255,0.3);
+      --separator: rgba(255,255,255,0.12);
+      --accent: #0a84ff; --accent-hover: #3a9bff; --accent-soft: rgba(10,132,255,0.18);
+      --green: #30d158; --danger: #ff6961;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.4); --shadow-md: 0 4px 16px rgba(0,0,0,0.45);
+      --shadow-lg: 0 12px 36px rgba(0,0,0,0.5);
+      --focus-ring: 0 0 0 3px rgba(10,132,255,0.4);
+    }
+  }
+  /* 减弱动态效果：shadow 内部样式表够不到页面级全局兜底，这里自行关停 */
+  @media (prefers-reduced-motion: reduce) {
+    .overlay *, .overlay *::before, .overlay *::after { transition: none !important; animation: none !important; }
   }
   .overlay {
     position: fixed; inset: 0; z-index: 2147483000;
@@ -141,9 +167,10 @@ const PANEL_CSS = `
     display: flex; flex-direction: column;
     box-shadow: var(--shadow-lg, 0 8px 30px rgba(0,0,0,0.08));
   }
+  /* 标题栏不画底边框：标签栏下沿已是唯一分隔线，两道线叠加会在顶部形成双横线 */
   header.head {
     display: flex; align-items: center; gap: 10px;
-    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    padding: 14px 18px 10px;
   }
   .logo { width: 26px; height: 26px; border-radius: 50%; display: block; flex: none;
     user-select: none; }
@@ -151,12 +178,13 @@ const PANEL_CSS = `
   .close-btn { border: none; background: transparent; font-size: 20px; line-height: 1;
     cursor: pointer; color: var(--text-3); padding: 4px 8px; border-radius: var(--radius-sm); transition: var(--transition); }
   .close-btn:hover { background: var(--surface-3); color: var(--text); }
-  nav.tabs { display: flex; gap: 2px; padding: 8px 12px 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  nav.tabs { display: flex; gap: 2px; padding: 8px 12px 0; border-bottom: 1px solid var(--separator); overflow-x: auto; }
   nav.tabs button {
     border: none; background: transparent; padding: 8px 14px; font-size: 13.5px;
     color: var(--text-2); cursor: pointer; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
     border-bottom: 2px solid transparent; white-space: nowrap; transition: var(--transition);
   }
+  nav.tabs button:hover:not(.active) { color: var(--text); background: var(--surface-2); }
   nav.tabs button.active { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
   main.body { padding: 16px 18px 22px; overflow-y: auto; }
   section { display: none; }
@@ -169,7 +197,7 @@ const PANEL_CSS = `
     width: 100%; padding: 8px 10px; font-size: 13.5px; color: var(--text);
     border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card); outline: none; transition: var(--transition);
   }
-  input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,0,0,0.08); }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
   textarea { min-height: 76px; resize: vertical; }
   .row { display: flex; gap: 8px; align-items: center; }
   button.act {
@@ -180,7 +208,7 @@ const PANEL_CSS = `
   button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
   button.primary:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: var(--shadow-md); }
   button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
-  button.danger:hover { background: rgba(196,92,72,0.06); border-color: var(--danger); }
+  button.danger:hover { background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: var(--danger); }
   button.act:disabled { opacity: 0.45; cursor: not-allowed; }
   .status { font-size: 12.5px; margin-top: 10px; min-height: 18px; line-height: 1.45; white-space: pre-wrap; }
   .status.ok { color: var(--green); }
@@ -189,10 +217,10 @@ const PANEL_CSS = `
 
   /* 服务商 rail */
   .rail { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-  .rail-label { flex-basis: 100%; font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: -2px; }
+  .rail-label { flex-basis: 100%; font-size: 12px; font-weight: 600; color: var(--text-3); margin-bottom: -2px; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px;
-    border: 1px solid #d7dbe0; border-radius: 999px; padding: 4px 10px 4px 6px;
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px 4px 6px;
     background: var(--card); cursor: pointer; font-size: 12.5px; color: var(--text-2); transition: var(--transition);
   }
   .chip:hover { border-color: var(--border-hover); }
@@ -201,8 +229,8 @@ const PANEL_CSS = `
     justify-content: center; color: var(--c, #666); background: rgba(0,0,0,0.04); font-size: 10px; font-weight: 700; flex: none; }
   .plogo svg { width: 13px; height: 13px; }
   .pdot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-hover); flex: none; }
-  .pdot.on { background: var(--green); box-shadow: 0 0 0 3px rgba(52,199,89,0.15); animation: moyiPulse 2s ease-in-out infinite; }
-  @keyframes moyiPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(52,199,89,0.4); } 50% { box-shadow: 0 0 0 6px rgba(52,199,89,0); } }
+  .pdot.on { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 15%, transparent); animation: moyiPulse 2s ease-in-out infinite; }
+  @keyframes moyiPulse { 0%,100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 40%, transparent); } 50% { box-shadow: 0 0 0 6px transparent; } }
   .badge-active { font-size: 11px; color: var(--green); font-weight: 700; }
 
   .checkline { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-block: 12px; cursor: pointer; }
@@ -221,14 +249,14 @@ const PANEL_CSS = `
   input[type="range"] { width: 100%; accent-color: var(--accent); }
   .slider-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; }
   .slider-val { font-size: 12.5px; color: var(--text-2); min-width: 72px; text-align: right; }
-  .preview-box { border: 1.5px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; margin-top: 14px; background: #1a1a1a; }
-  .preview-tag { font-size: 11px; color: rgba(255,255,255,0.3); letter-spacing: 0.08em; margin-bottom: 8px; }
+  .preview-box { border: 1.5px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; margin-top: 14px; background: var(--surface-2); }
+  .preview-tag { font-size: 11px; color: var(--text-3); letter-spacing: 0.08em; margin-bottom: 8px; }
   .kv { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 
   .radio-line { display: flex; gap: 14px; flex-wrap: wrap; margin-block: 6px; }
   .radio-line label { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
   .charcount { font-size: 11.5px; color: var(--text-3); text-align: right; margin-top: 3px; }
-  hr.sep { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+  hr.sep { border: none; border-top: 1px solid var(--separator); margin: 16px 0; }
 `;
 
 const buildProviderLogo = (meta: ProviderMeta): HTMLElement => {
@@ -650,9 +678,10 @@ const renderStyleTab = async (container: HTMLElement): Promise<void> => {
   ): void => {
     previewBox.textContent = '';
     previewBox.append(el('div', { class: 'preview-tag', text: '预览 · The ink flows gently across the paper.' }));
-    const sample = el('p', { text: 'The ink flows gently across the paper.', style: 'margin:0;color:#1c1e21;' }) as HTMLParagraphElement;
+    const sample = el('p', { text: 'The ink flows gently across the paper.', style: 'margin:0;color:var(--text);' }) as HTMLParagraphElement;
     const snapshot = captureElementTypography(sample);
     const { fontSizePx, lineHeightPx, gapPx } = computeTranslationTypography(snapshot, theme.fontScale);
+    // marker 装饰直接复用渲染层导出的 buildMarkerRules：预览 = 真实渲染，不再手写第二套
     const translation = el('p', {
       text: '墨迹在纸上轻轻流淌。',
       style: [
@@ -663,15 +692,7 @@ const renderStyleTab = async (container: HTMLElement): Promise<void> => {
         `color:${resolveReadableColor(theme.color, snapshot.bgLuminance)}`,
         theme.fontFamily ? `font-family:${theme.fontFamily}` : '',
         theme.letterSpacing !== 0 ? `letter-spacing:${theme.letterSpacing}em` : '',
-        theme.preset === 'ink-line'
-          ? 'border-left:2px solid rgba(176,58,46,.3);padding-left:.6em'
-          : theme.preset === 'jade-line'
-            ? 'border-left:2px solid rgba(63,74,86,.35);padding-left:.6em'
-            : theme.preset === 'underline'
-              ? 'border-bottom:1px dashed rgba(103,135,116,.55)'
-              : theme.preset === 'highlight'
-                ? 'background:rgba(226,238,241,.9);padding:.2em .55em;border-radius:2px;display:inline-block'
-                : '',
+        buildMarkerRules(theme.preset as TranslationStylePreset),
       ].filter(Boolean).join(';'),
     }) as HTMLParagraphElement;
     previewBox.append(sample, translation);

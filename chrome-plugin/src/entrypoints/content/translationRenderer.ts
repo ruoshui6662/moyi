@@ -48,8 +48,9 @@ export const toTranslationTheme = (config: Pick<TranslatorConfig, 'translationSt
 /** 判断当前主题是否为「直接替换原文」模式。 */
 export const isReplacePreset = (preset: TranslationStylePreset): boolean => preset === 'replace';
 
-/** marker 装饰：仅类样式，几何与文本契约由译文节点内联样式保证。 */
-const buildMarkerRules = (preset: TranslationStylePreset): string => {
+/** marker 装饰：仅类样式，几何与文本契约由译文节点内联样式保证。
+ *  导出供油猴设置面板的样式预览复用，避免预览与真实渲染两套规则漂移。 */
+export const buildMarkerRules = (preset: TranslationStylePreset): string => {
   switch (preset) {
     case 'ink-line':
       return 'border-inline-start: 2px solid rgba(176, 58, 46, 0.3); padding-inline-start: 0.6em;';
@@ -58,7 +59,9 @@ const buildMarkerRules = (preset: TranslationStylePreset): string => {
     case 'underline':
       return 'border-block-end: 1px dashed rgba(103, 135, 116, 0.55); padding-block-end: 0.15em;';
     case 'highlight':
-      return 'background: rgba(226, 238, 241, 0.9); border-radius: 2px; padding-inline: 0.55em; padding-block: 0.2em;';
+      /* 月白高亮：底色需在白页上也读得出「被标记」（原 rgba(226,238,241,.9) 与白底仅 1.05:1，
+         标记形同消失）；压深到约 1.5:1，仍属克制的浅色水洗 */
+      return 'background: rgba(189, 216, 228, 0.9); border-radius: 2px; padding-inline: 0.55em; padding-block: 0.2em;';
     default:
       return '';
   }
@@ -86,7 +89,7 @@ export const buildTranslationCss = (theme: TranslationTheme): string => `
   .${ERROR_CLASS} {
     display: block;
     margin-block-start: 0.35em;
-    color: #b03a2e;
+    color: #b23b31;
     font-size: 0.85em;
   }
   @media (prefers-reduced-motion: reduce) {
@@ -292,7 +295,9 @@ export const renderPartialTranslation = (element: HTMLElement, partialText: stri
   if (!state || state.generation !== generation || !element.isConnected) return false;
   const typography = snapshot ?? state.typography;
   if (state.translatedNode && state.translatedNode.isConnected) {
-    applyInlineStyleMap(state.translatedNode, buildTranslationInlineStyle(typography, activeTheme.fontScale, activeTheme.color));
+    // 性能：样式已在节点创建时应用一次；主题热更新另有 refreshActiveTranslationStyles 全量刷新。
+    // partial 是流式热路径（每秒可达几十帧），只写文字，不再每帧重建内联样式
+    // （cssText 清空 + 逐属性 setProperty 会触发样式失效与重排）。
     state.translatedNode.textContent = partialText;
     updateTranslationState(element, { typography });
     return true;
@@ -313,7 +318,7 @@ export const renderTranslationError = (element: HTMLElement, message: string, ge
   errorNode.className = ERROR_CLASS;
   errorNode.dataset.personalTranslatorOwned = 'true';
   // 暗色网页上错误提示同样提亮为浅红，保证可见
-  errorNode.style.color = resolveReadableColor('#b03a2e', state.typography.bgLuminance);
+  errorNode.style.color = resolveReadableColor('#b23b31', state.typography.bgLuminance);
   errorNode.textContent = `翻译失败：${message}`;
   element.appendChild(errorNode);
   updateTranslationState(element, { phase: 'error', errorNode });

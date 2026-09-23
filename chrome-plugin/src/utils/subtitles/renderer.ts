@@ -13,6 +13,7 @@ import {
   type SubtitleDisplayMode,
 } from './config';
 import { FLOAT_LOGO_DATA_URI } from '../../entrypoints/content/floatLogo';
+import { OVERLAY_FONT_STACK, OVERLAY_TOKENS_CSS } from '../../styles/overlayTokens';
 
 const HOST_ID = 'moyi-yt-subtitles-host';
 const NATIVE_HIDE_STYLE_ID = 'moyi-yt-hide-native-captions';
@@ -83,14 +84,19 @@ export interface PlayerControlCallbacks {
 
 const SHADOW_MARKUP = `
 <style>
-  :host { all: initial; }
+  /* 叠加型 UI：固定深色 token 与统一字体栈（与 styles/tokens.css 的 --overlay-* 组一致） */
+  :host {
+    all: initial;
+    ${OVERLAY_TOKENS_CSS}
+    font-family: ${OVERLAY_FONT_STACK};
+  }
   .wrap {
     position: absolute;
     left: 0;
     right: 0;
     /* 控制条出现时整体上抬，避免字幕被 YouTube 进度条遮挡 */
     bottom: calc(9% + var(--moyi-sub-controls-h, 0px));
-    transition: bottom 0.15s ease;
+    transition: bottom var(--duration-base) var(--ease-standard);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -98,7 +104,7 @@ const SHADOW_MARKUP = `
     padding: 0 5%;
     text-align: center;
     pointer-events: none;
-    font-family: var(--moyi-sub-font-family, 'Roboto', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif);
+    font-family: var(--moyi-sub-font-family, ${OVERLAY_FONT_STACK});
   }
   .line {
     max-width: 100%;
@@ -110,7 +116,7 @@ const SHADOW_MARKUP = `
     overflow-wrap: anywhere;
     text-shadow: var(--moyi-sub-shadow, none);
     opacity: 0;
-    transition: opacity 0.12s ease;
+    transition: opacity var(--duration-fast) var(--ease-standard);
   }
   .line.on { opacity: 1; }
   .line.original {
@@ -128,9 +134,10 @@ const SHADOW_MARKUP = `
     display: none;
     max-width: 80%;
     padding: 6px 14px;
-    border-radius: 7px;
+    border-radius: var(--overlay-radius-sm);
+    /* 半透明压暗层：叠在任意视频画面上，非主题色，保留字面 scrim */
     background: rgba(0, 0, 0, 0.62);
-    color: #f1f1f1;
+    color: var(--overlay-label);
     font-size: 14px;
     line-height: 1.5;
     text-shadow: none;
@@ -147,11 +154,11 @@ const SHADOW_MARKUP = `
     bottom: var(--moyi-sub-panel-offset, 22px);
     width: 236px;
     padding: 12px 14px 10px;
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: rgba(17, 17, 20, 0.94);
+    border-radius: var(--overlay-radius-md);
+    border: 1px solid var(--overlay-border);
+    background: var(--overlay-surface);
     backdrop-filter: blur(10px);
-    color: #e8e8ea;
+    color: var(--overlay-label);
     font-size: 13px;
     line-height: 1.4;
     text-align: left;
@@ -160,26 +167,42 @@ const SHADOW_MARKUP = `
   }
   .panel.open { display: block; }
   .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-  .panel-title { font-size: 13px; font-weight: 600; color: #fff; }
-  .panel-close { border: 0; background: transparent; color: #9a9aa2; font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 4px; }
-  .panel-close:hover { color: #fff; }
+  .panel-title { font-size: 13px; font-weight: 600; color: var(--overlay-label); }
+  .panel-close {
+    border: 0; background: transparent; color: var(--overlay-label-2);
+    font-size: 16px; line-height: 1; cursor: pointer; padding: 4px 6px; min-width: 24px; min-height: 24px;
+    border-radius: var(--overlay-radius-sm);
+  }
+  .panel-close:hover { color: var(--overlay-label); background: rgba(255, 255, 255, 0.08); }
   .panel-head ~ .panel-row,
   .panel-head ~ .panel-col { border-top: 1px solid rgba(255, 255, 255, 0.07); }
   .panel-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; }
   .panel-col { display: flex; flex-direction: column; gap: 2px; padding: 7px 0; }
-  .panel-label { color: #c9c9cf; }
-  .power { position: relative; width: 36px; height: 20px; border-radius: 10px; border: 0; background: #4a4a52; cursor: pointer; transition: background 0.15s ease; padding: 0; flex: none; }
-  .power[aria-checked='true'] { background: #3f7a52; }
-  .power::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 0.15s ease; }
+  .panel-label { color: var(--overlay-label-2); }
+  .panel button:focus-visible {
+    outline: 2px solid var(--color-accent, #0a84ff);
+    outline-offset: 2px;
+  }
+  .power { position: relative; width: 36px; height: 20px; border-radius: 10px; border: 0; background: rgba(255, 255, 255, 0.22); cursor: pointer; transition: background var(--duration-fast) var(--ease-standard); padding: 0; flex: none; }
+  .power:hover { background: rgba(255, 255, 255, 0.32); }
+  /* 开启态 = 强调色（Apple 系统蓝），与全项目开关语义一致 */
+  .power[aria-checked='true'] { background: var(--color-accent, #0a84ff); }
+  .power::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left var(--duration-fast) var(--ease-standard); }
   .power[aria-checked='true']::after { left: 18px; }
-  .seg { display: flex; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; overflow: hidden; width: 100%; margin-top: 6px; }
-  .seg button { flex: 1; padding: 5px 0; border: 0; background: transparent; color: #b9b9c0; font-size: 12px; cursor: pointer; }
-  .seg button.active { background: rgba(63, 122, 82, 0.55); color: #fff; }
+  .seg { display: flex; border: 1px solid var(--overlay-border); border-radius: var(--overlay-radius-sm); overflow: hidden; width: 100%; margin-top: 6px; }
+  .seg button { flex: 1; padding: 5px 0; border: 0; background: transparent; color: var(--overlay-label-2); font-size: 12px; cursor: pointer; transition: background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
+  .seg button:hover { color: var(--overlay-label); background: rgba(255, 255, 255, 0.06); }
+  .seg button.active { background: color-mix(in srgb, var(--color-accent, #0a84ff) 55%, transparent); color: #fff; }
   .seg button + button { border-left: 1px solid rgba(255, 255, 255, 0.1); }
   .stepper { display: flex; align-items: center; gap: 8px; }
-  .stepper button { width: 24px; height: 24px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.06); color: #eee; font-size: 14px; line-height: 1; cursor: pointer; }
-  .stepper button:hover { background: rgba(255, 255, 255, 0.14); }
-  .size-val { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; color: #fff; }
+  .stepper button { width: 24px; height: 24px; border-radius: var(--overlay-radius-sm); border: 1px solid var(--overlay-border); background: rgba(255, 255, 255, 0.06); color: var(--overlay-label); font-size: 14px; line-height: 1; cursor: pointer; transition: background var(--duration-fast) var(--ease-standard); }
+  .stepper button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.14); }
+  .stepper button:disabled { opacity: .35; cursor: default; }
+  .size-val { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; color: var(--overlay-label); }
+  /* 减弱动态效果：document 级样式表够不到 shadow 内部，这里自行关停 */
+  @media (prefers-reduced-motion: reduce) {
+    .wrap, .line, .panel, .panel button, .panel * { transition: none !important; animation: none !important; }
+  }
 </style>
 <div class="wrap mode-bilingual">
   <div class="line translation"></div>
@@ -428,7 +451,16 @@ export class SubtitleRenderer {
   setPanelState(displayMode: SubtitleDisplayMode, fontSize: number, paused: boolean): void {
     this.setPausedVisual(paused);
     for (const button of this.segButtons) {
-      button.classList.toggle('active', button.dataset.mode === displayMode);
+      const selected = button.dataset.mode === displayMode;
+      button.classList.toggle('active', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    }
+    // 字号到边界时禁用对应步进按钮：视觉与语义一致，不再静默钳制
+    if (this.panelEl) {
+      const minus = this.panelEl.querySelector<HTMLButtonElement>('[data-step="-2"]');
+      const plus = this.panelEl.querySelector<HTMLButtonElement>('[data-step="2"]');
+      if (minus) minus.disabled = clampStepFontSize(fontSize, -2) === clampStepFontSize(fontSize, 0);
+      if (plus) plus.disabled = clampStepFontSize(fontSize, 2) === clampStepFontSize(fontSize, 0);
     }
     if (this.sizeVal) this.sizeVal.textContent = `${Math.round(fontSize)}px`;
   }

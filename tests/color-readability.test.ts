@@ -62,4 +62,21 @@ describe('resolveReadableColor', () => {
     expect(DARK_BG_LUMINANCE).toBeGreaterThan(0);
     expect(DARK_BG_LUMINANCE).toBeLessThan(0.5);
   });
+
+  it('中浅背景（旧阈值漏掉的 0.35–0.6 区间）也保证 AA 对比度', () => {
+    const midGray = 0.45;
+    const resolved = resolveReadableColor('#3f4a56', midGray);
+    const rgb = {
+      r: Number.parseInt(resolved.slice(1, 3), 16),
+      g: Number.parseInt(resolved.slice(3, 5), 16),
+      b: Number.parseInt(resolved.slice(5, 7), 16),
+    };
+    expect(contrastFromLuminance(relativeLuminance(rgb), midGray)).toBeGreaterThanOrEqual(TARGET_CONTRAST);
+    // 浅底上提高对比度的方向是压暗，不是提亮
+    expect(relativeLuminance(rgb)).toBeLessThan(relativeLuminance({ r: 63, g: 74, b: 86 }));
+  });
+
+  it('已达标的前景色原样返回（浅底默认色零变化）', () => {
+    expect(resolveReadableColor('#3f4a56', 0.95)).toBe('#3f4a56');
+  });
 });

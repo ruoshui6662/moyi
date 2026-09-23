@@ -1,3 +1,5 @@
+// 共享设计 token：WXT 构建时注入 <head>，必须先于页面自身样式表生效
+import '../../styles/tokens.css';
 import {
   DEFAULT_CONFIG,
   getConfig,
@@ -123,6 +125,8 @@ const toggleKeyVisibilityButton = document.querySelector<HTMLButtonElement>('#to
 const promptCharCount = document.querySelector<HTMLSpanElement>('#promptCharCount')!;
 const toastHost = document.querySelector<HTMLDivElement>('#toastHost')!;
 const confirmModal = document.querySelector<HTMLDivElement>('#confirmModal')!;
+const modalTitle = document.querySelector<HTMLHeadingElement>('#modalTitle')!;
+const modalBody = document.querySelector<HTMLDivElement>('#confirmModal .modal-body')!;
 const modalCancelButton = document.querySelector<HTMLButtonElement>('#modalCancel')!;
 const modalConfirmButton = document.querySelector<HTMLButtonElement>('#modalConfirm')!;
 // ── 字幕翻译（独立配置契约，见 utils/subtitles/config.ts）──
@@ -165,19 +169,94 @@ const showToast = (message: string, tone: 'ok' | 'error' = 'ok'): void => {
   }, 2000);
 };
 
-const confirmDanger = (): Promise<boolean> =>
+interface ConfirmOptions {
+  title: string;
+  /** 正文逐行渲染；一律走 textContent，用户数据（服务商名）不会拼进 HTML。 */
+  body: string[];
+  confirmLabel: string;
+}
+
+/** 默认文案：恢复全部默认配置。 */
+const DEFAULT_CONFIRM: ConfirmOptions = {
+  title: '恢复全部默认配置？',
+  body: [
+    '此操作将：',
+    '• 清除所有 API Key',
+    '• 删除服务配置',
+    '• 恢复提示词设置',
+    '• 恢复译文样式',
+    '此操作无法撤销。',
+  ],
+  confirmLabel: '恢复默认配置',
+};
+
+/**
+ * 危险操作确认弹窗：Esc 关闭、Tab 焦点陷阱、初始焦点落在「取消」、
+ * 点遮罩关闭、关闭后把焦点还给触发元素（Apple HIG 模态可访问性要求）。
+ */
+const confirmDanger = (options: Partial<ConfirmOptions> = {}): Promise<boolean> =>
   new Promise((resolve) => {
+    const config: ConfirmOptions = { ...DEFAULT_CONFIRM, ...options };
+    const restoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    modalTitle.textContent = config.title;
+    modalBody.replaceChildren(
+      ...config.body.map((line) => {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = line;
+        paragraph.style.margin = '0 0 6px';
+        return paragraph;
+      }),
+    );
+    modalConfirmButton.textContent = config.confirmLabel;
     confirmModal.hidden = false;
+
+    const focusableItems = (): HTMLElement[] =>
+      Array.from(confirmModal.querySelectorAll<HTMLElement>('button:not([disabled])'));
+
+    const onKeydown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        close(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusableItems();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      const inside = active instanceof HTMLElement && confirmModal.contains(active);
+      if (event.shiftKey && (!inside || active === first)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (!inside || active === last)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    const onOverlayPointerDown = (event: MouseEvent): void => {
+      if (event.target === confirmModal) close(false);
+    };
+
     const close = (result: boolean): void => {
       confirmModal.hidden = true;
+      document.removeEventListener('keydown', onKeydown, true);
+      confirmModal.removeEventListener('mousedown', onOverlayPointerDown);
       modalCancelButton.removeEventListener('click', onCancel);
       modalConfirmButton.removeEventListener('click', onConfirm);
+      restoreFocus?.focus();
       resolve(result);
     };
     const onCancel = (): void => close(false);
     const onConfirm = (): void => close(true);
     modalCancelButton.addEventListener('click', onCancel);
     modalConfirmButton.addEventListener('click', onConfirm);
+    confirmModal.addEventListener('mousedown', onOverlayPointerDown);
+    document.addEventListener('keydown', onKeydown, true);
+    modalCancelButton.focus();
   });
 
 const setStatus = (element: HTMLElement, message: string, tone: StatusTone = 'idle'): void => {
@@ -1002,7 +1081,14 @@ deleteProviderButton.addEventListener('click', () => {
     const isDraft = !currentConfig.providers[id];
     if (!isDraft && !draftProviderIds.has(id)) return;
     const name = getProviderDisplayName(currentConfig.providers, id);
-    if (!window.confirm(isDraft ? `确定放弃「${name}」？尚未保存的配置将被丢弃。` : `确定删除「${name}」？此操作会清除其 API Key 与配置，无法撤销。`)) return;
+    const confirmed = await confirmDanger({
+      title: isDraft ? '放弃未保存的服务商？' : `删除「${name}」？`,
+      body: isDraft
+        ? [`「${name}」尚未保存，放弃后已填写的内容将被丢弃。`]
+        : [`「${name}」的 API Key 与服务配置将被清除。`, '此操作无法撤销。'],
+      confirmLabel: isDraft ? '放弃' : '删除服务商',
+    });
+    if (!confirmed) return;
 
     // 草稿：直接从内存移除并回到内置服务商
     if (isDraft) {
@@ -1130,6 +1216,7 @@ fetchModelsButton.addEventListener('click', () => {
         endpoint: endpointValue,
         apiKey: effectiveApiKey(),
         kind: meta.kind,
+        providerId: fetchFor,
       }) as { ok?: boolean; models?: string[]; error?: string };
       const models = result?.ok && Array.isArray(result.models) ? result.models : [];
       logger.info('options.fetch_models.response', { ok: Boolean(result?.ok), count: models.length, error: result?.error });

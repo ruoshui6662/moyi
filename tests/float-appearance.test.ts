@@ -98,9 +98,17 @@ describe('floating button appearance', () => {
   it('applyFloatAppearance 热更新已挂载按钮', () => {
     mount();
     const fab = fabOf();
-    applyFloatAppearance({ size: 28, opacity: 0.3 });
+    applyFloatAppearance({ size: 28, opacity: 0.6 });
     expect(fab.style.getPropertyValue('--moyi-fab-size')).toBe('28px');
-    expect(fab.style.getPropertyValue('--moyi-fab-opacity')).toBe('0.3');
+    expect(fab.style.getPropertyValue('--moyi-fab-opacity')).toBe('0.6');
+  });
+
+  it('低于可发现性下限的透明度被钳制到 0.4', () => {
+    mount();
+    const fab = fabOf();
+    applyFloatAppearance({ opacity: 0.15 });
+    expect(FLOAT_OPACITY_MIN).toBe(0.4);
+    expect(fab.style.getPropertyValue('--moyi-fab-opacity')).toBe(String(FLOAT_OPACITY_MIN));
   });
 
   it('未挂载时 applyFloatAppearance 静默跳过', () => {

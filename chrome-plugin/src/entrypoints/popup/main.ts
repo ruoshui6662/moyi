@@ -1,3 +1,5 @@
+// 共享设计 token：WXT 构建时注入 <head>，必须先于页面自身样式表生效
+import '../../styles/tokens.css';
 import { DEFAULT_CONFIG, getConfig, saveConfig, type TranslatorConfig } from '../../utils/config';
 import { logger } from '../../utils/logger';
 import { sanitizePromptStyle } from '../../utils/prompts';
