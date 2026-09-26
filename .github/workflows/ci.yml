@@ -1,0 +1,44 @@
+# 墨译 CI：类型检查 + 全量单测（README 待办 5 的收口）
+#
+# 门禁只做「本地同款、零环境依赖」的两件事：
+# - npm run compile：tsc --noEmit（strict 全量类型检查）
+# - npm test：vitest run（614 项，jsdom）
+# 刻意不跑构建：wxt build 产物与仓库无关（dist 由发布流程拷贝），
+# 把构建塞进 CI 只会拖慢每次信号、且失败时难以定位是代码还是环境问题。
+# 合并前的本地同款命令：npm run compile && npm test
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 类型检查 + 单测
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Node（20.19+，vitest 3 / wxt 0.20 的最低要求）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19'
+          cache: npm
+
+      - name: 安装依赖（lockfile 严格模式：CI 与本地跑同一份依赖树）
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run compile
+
+      - name: 单元测试
+        run: npm test

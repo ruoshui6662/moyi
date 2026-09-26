@@ -3,6 +3,7 @@ import { isBlockElement, isCandidateContainer } from './layout';
 import { extractText, isMeaningfulText } from './text';
 import { captureElementTypography } from './typography';
 import type { TranslationCandidate } from './types';
+import { EMPTY_RULE_SET, matchesAnySelector, type CompiledRuleSet } from '../utils/siteRules';
 
 const isVisible = (element: HTMLElement): boolean => {
   if (element.getAttribute('aria-hidden') === 'true' || element.hidden) return false;
@@ -17,6 +18,9 @@ export const findTranslationCandidates = (
   /** 本会话已发现的候选：连同其子树一起跳过（其后代按原去重规则也永远不会是候选），
    *  每次调用只返回「新」候选——长文滚动补扫靠它在同上限下逐步覆盖第 101+ 段。 */
   known?: ReadonlySet<HTMLElement>,
+  /** 站点规则集（可空）：exclude 早退剪枝、forceInclude 旁路补充候选；
+   *  为空时行为与规则上线前逐字节一致。 */
+  ruleSet: CompiledRuleSet = EMPTY_RULE_SET,
 ): TranslationCandidate[] => {
   const candidates: TranslationCandidate[] = [];
   const seen = new Set<HTMLElement>();
@@ -28,6 +32,7 @@ export const findTranslationCandidates = (
     acceptNode: (node) => {
       const element = node as Element;
       if (known?.has(element as HTMLElement)) return NodeFilter.FILTER_REJECT;
+      if (ruleSet.exclude.length > 0 && matchesAnySelector(element, ruleSet.exclude)) return NodeFilter.FILTER_REJECT;
       return isHardPruneElement(element) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
     },
   });
@@ -70,6 +75,32 @@ export const findTranslationCandidates = (
       text,
       typography: captureElementTypography(element),
     });
+  }
+
+  if (ruleSet.forceInclude && ruleSet.include.length > 0) {
+    for (const selector of ruleSet.include) {
+      let matches: NodeListOf<Element>;
+      try {
+        matches = root.querySelectorAll(selector);
+      } catch {
+        continue; // 坏选择器：不中断管线
+      }
+      for (const node of Array.from(matches)) {
+        const element = node as HTMLElement;
+        if (seen.has(element) || ancestorSet.has(element) || known?.has(element)) continue;
+        // 防御：自有节点（译文/浮层）与输入域绝不捞回；其余沿用可见性与文本契约
+        if (element.matches('[data-personal-translator-owned], input, textarea, select')) continue;
+        if (!isVisible(element)) continue;
+        // 强捞通道的文本提取同样要绕开剪枝谓词——否则元素捞到了、文本却是空的
+        const text = extractText(element, { maxCharacters: 8_000, ignoreProtectedAncestors: true });
+        if (!isMeaningfulText(text)) continue;
+        seen.add(element);
+        markAncestors(element);
+        candidates.push({ element, text, typography: captureElementTypography(element) });
+        if (candidates.length >= maxCandidates) break;
+      }
+      if (candidates.length >= maxCandidates) break;
+    }
   }
 
   return deduplicateCandidates(candidates);

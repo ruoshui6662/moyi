@@ -149,3 +149,59 @@ describe('BatchingScheduler', () => {
     expect(batchChars).toEqual([10, 4, 30, 2]);
   });
 });
+
+describe('动态装箱（W2.1 请求数缩减）', () => {
+  const makeItems = (count: number, chars: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      text: 'x'.repeat(chars),
+      element: document.createElement('p'),
+    }));
+
+  it('字符预算内短段落按条数上限 16 装箱：100×50 字符 → 7 批（旧上限 8 需 13 批，降 46%）', async () => {
+    const batchSizes: number[] = [];
+    const scheduler = new BatchingScheduler({
+      batchSize: 16,
+      concurrency: 1,
+      itemChars: (item) => item.text.length,
+      maxBatchChars: 6000,
+      runBatch: async (items) => {
+        batchSizes.push(items.length);
+      },
+    });
+    scheduler.enqueue(makeItems(100, 50));
+    await scheduler.waitForIdle();
+    expect(batchSizes).toEqual([16, 16, 16, 16, 16, 16, 4]);
+  });
+
+  it('长段落由字符预算自动缩批：8×1000 字符 → 每批最多 6 段（6000 预算）', async () => {
+    const batchSizes: number[] = [];
+    const scheduler = new BatchingScheduler({
+      batchSize: 16,
+      concurrency: 1,
+      itemChars: (item) => item.text.length,
+      maxBatchChars: 6000,
+      runBatch: async (items) => {
+        batchSizes.push(items.length);
+      },
+    });
+    scheduler.enqueue(makeItems(8, 1000));
+    await scheduler.waitForIdle();
+    expect(batchSizes).toEqual([6, 2]);
+  });
+
+  it('单段超预算独占一批（不拆段的既有契约保持）', async () => {
+    const batchSizes: number[] = [];
+    const scheduler = new BatchingScheduler({
+      batchSize: 16,
+      concurrency: 1,
+      itemChars: (item) => item.text.length,
+      maxBatchChars: 6000,
+      runBatch: async (items) => {
+        batchSizes.push(items.length);
+      },
+    });
+    scheduler.enqueue(makeItems(3, 7000));
+    await scheduler.waitForIdle();
+    expect(batchSizes).toEqual([1, 1, 1]);
+  });
+});

@@ -611,9 +611,32 @@ describe('truncation & retry guards', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   }, 15_000);
 
-  it('does not retry 429（尊重限流，既有文案保持）', async () => {
+  it('retries 429 once when Retry-After is actionable（尊重限流而非放弃整批）', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('rate limited', { status: 429, headers: { 'Retry-After': '0' } }))
+      .mockResolvedValueOnce(okBody('你好'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await translateWithOpenAICompatible(singleRequest);
+    expect(result).toBe('你好');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // 重试请求带着同一份报文（翻译请求天然可重发）
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).body).toEqual((fetchMock.mock.calls[0]?.[1] as RequestInit).body);
+  }, 15_000);
+
+  it('does not retry 429 without an actionable Retry-After（既有文案保持）', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response('rate limited', { status: 429, headers: { 'Retry-After': '13' } }),
+      new Response('rate limited', { status: 429 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(translateWithOpenAICompatible(singleRequest)).rejects.toThrow(/429/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry 429 when Retry-After exceeds the wait ceiling', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('rate limited', { status: 429, headers: { 'Retry-After': '999' } }),
     );
     vi.stubGlobal('fetch', fetchMock);
 

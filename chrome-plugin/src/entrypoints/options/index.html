@@ -122,14 +122,21 @@
       .guide-button svg { width: 14px; height: 14px; }
 
       /* ── 卡片与设置行 ── */
+      /* 容器去框：Apple 获奖应用的设计语言——不用描边与投影框住内容，
+         层级靠 surface/canvas 色差 + 留白 + 内部发丝线表达。 */
+      /* 统一的线条语言：容器=1px 细描边分组（不用投影，线条承担层级），
+         组内=发丝线分条目，末行收口。相邻卡片仅留间距，不再叠第三种分隔元素。 */
       .card {
         background: var(--color-surface);
         border: 1px solid var(--color-separator);
         border-radius: var(--radius-lg);
-        box-shadow: var(--shadow-1);
-        padding: var(--space-1) var(--space-6);
+        box-shadow: none;
+        padding: var(--space-2) var(--space-6);
       }
-      .setting-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) 0; border-bottom: 1px solid var(--color-separator); }
+      .card + .card { margin-top: var(--space-3); }
+      .setting-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4) 0; border-bottom: 1px solid color-mix(in srgb, var(--color-separator) 72%, transparent); }
+      /* 组内条目一律发丝线分隔，仅末行收口——规则单一，不随后继元素变化 */
+      .setting-row:last-child { border-bottom: none; }
       .setting-row.no-border { border-bottom: none; }
       .row-main { min-width: 0; }
       .row-label { font-size: 13px; font-weight: 400; }
@@ -138,7 +145,7 @@
       .toggle-row { cursor: default; }
 
       /* ── 输入域 ── */
-      .field { padding: var(--space-3) 0 var(--space-4); border-bottom: 1px solid var(--color-separator); }
+      .field { padding: var(--space-3) 0 var(--space-4); border-bottom: 1px solid color-mix(in srgb, var(--color-separator) 72%, transparent); }
       .field label { display: block; font-size: 13px; font-weight: 400; color: var(--color-label-2); margin-bottom: var(--space-2); }
       .field.no-sep { border-bottom: none; }
       input[type='url'], input[type='password'], input[type='text'] {
@@ -173,7 +180,7 @@
       .switch input:disabled + .knob { opacity: .45; }
 
       /* ── 按钮体系 ── */
-      .btn-row { display: flex; gap: var(--space-2); padding: var(--space-4) 0 var(--space-2); justify-content: flex-start; }
+      .btn-row { display: flex; gap: var(--space-2); padding: var(--space-4) 0 var(--space-1); justify-content: flex-start; }
       button { cursor: pointer; }
       .btn-primary-s, .btn-secondary-s, .btn-danger {
         height: 34px; padding: 0 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
@@ -218,6 +225,7 @@
       }
 
       /* ── 状态行 ── */
+      .status-line:empty { display: none; }
       .status-line { min-height: 14px; margin: var(--space-1) 0 var(--space-1); font-size: 12px; color: var(--color-label-2); display: flex; align-items: center; gap: var(--space-2); }
       .status-line.busy::before {
         content: ''; flex: none; width: 11px; height: 11px; border-radius: 50%;
@@ -234,6 +242,7 @@
       }
 
       /* ── 译文样式预设卡 ── */
+      .card > .block-label:first-child { padding-top: var(--space-1); }
       .block-label { font-size: 13px; font-weight: 400; color: var(--color-label-2); padding: var(--space-4) 0 var(--space-2); }
       .preset-grid, .prompt-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
       .preset-card, .prompt-card {
@@ -560,6 +569,32 @@
         .btn-row { flex-wrap: wrap; }
         .card { padding-inline: var(--space-4); }
       }
+
+      /* ── 术语表编辑行：沿用 .model-row 的 flex 惯例，输入框保持全局 38px 统一样式 ── */
+      .glossary-rows { margin-top: var(--space-4); }
+      .glossary-row { display: flex; gap: var(--space-2); align-items: center; }
+      .glossary-row + .glossary-row { margin-top: var(--space-2); }
+      .glossary-row input { flex: 1; min-width: 0; }
+      .glossary-arrow { flex: none; color: var(--color-label-3); font-size: 13px; }
+      .glossary-remove { flex: none; }
+
+      /* ── 生词本列表 ── */
+      .vocab-list { margin-top: var(--space-2); }
+      .vocab-row { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-separator); }
+      .vocab-row:last-child { border-bottom: none; }
+      .vocab-main { flex: 1; min-width: 0; }
+      .vocab-word { font-weight: 600; font-size: 13px; color: var(--color-label); }
+      .vocab-translation { font-size: 12px; color: var(--color-label-2); margin-top: 1px; }
+      .vocab-context, .vocab-source { font-size: 12px; color: var(--color-label-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+      /* ── 配置历史 / 场景列表 ── */
+      .profile-list { margin-top: var(--space-1); }
+      .profile-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--color-separator); }
+      .profile-row:last-child { border-bottom: none; }
+      .profile-main { flex: 1; min-width: 0; }
+      .profile-name { font-size: 13px; color: var(--color-label); }
+      .profile-sub { font-size: 12px; color: var(--color-label-3); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .profile-actions { display: inline-flex; gap: 10px; flex: none; }
     </style>
   </head>
   <body>
@@ -589,14 +624,31 @@
             <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10.5 10.3a2.1 2.1 0 1 0 0 3.4M17 10.3a2.1 2.1 0 1 0 0 3.4"/></svg></span>
             <span>字幕翻译</span>
           </button>
+          <button class="nav-item" data-target="sec-tts" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18 5.5a9 9 0 0 1 0 13"/></svg></span>
+            <span>朗读</span>
+          </button>
+          <button class="nav-item" data-target="sec-vocab" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"/></svg></span>
+            <span>生词本</span>
+          </button>
+          <button class="nav-item" data-target="sec-rules" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14l-1 8H6L5 4Z"/><path d="M12 12v8"/></svg></span>
+            <span>站点规则</span>
+          </button>
           <button class="nav-item" data-target="sec-shortcuts" type="button">
             <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h2m2 0h2m2 0h2M7 13h2m2 0h6"/></svg></span>
             <span>快捷键</span>
+          </button>
+          <button class="nav-item" data-target="sec-sync" type="button">
+            <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Z"/><path d="M4 7v5c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5"/></svg></span>
+            <span>备份与同步</span>
           </button>
           <button class="nav-item" data-target="sec-settings" type="button">
             <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.15.4.37.75.6 1 .28.3.67.48 1.1.5h.1v4h-.1A1.7 1.7 0 0 0 19.4 15Z"/></svg></span>
             <span>设置</span>
           </button>
+
           <button class="nav-item" data-target="sec-about" type="button">
             <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg></span>
             <span>关于</span>
@@ -796,6 +848,50 @@
             </div>
             <div id="promptStatus" class="status-line" role="status"></div>
           </div>
+          <div class="card">
+            <div class="block-label">术语表</div>
+            <p class="model-hint">固定译名：命中的原词按固定译名输出。AI 服务商注入提示词强制采用；DeepL、腾讯、微软、谷歌在译文上按词替换。改动自动保存，下次翻译即时生效。</p>
+            <div id="glossaryRows" class="glossary-rows"></div>
+            <div class="btn-row">
+              <button id="glossaryAdd" class="btn-secondary-s" type="button">添加术语</button>
+              <button id="glossaryPaste" class="btn-secondary-s" type="button">粘贴导入</button>
+              <button id="glossaryImport" class="btn-secondary-s" type="button">导入</button>
+              <button id="glossaryExport" class="btn-secondary-s" type="button">导出</button>
+              <input id="glossaryFile" type="file" accept=".json,application/json" hidden />
+            </div>
+            <div id="glossaryPasteBox" class="field no-sep" hidden>
+              <label for="glossaryPasteInput">粘贴词表：每行一条「原词 → 译名」，逗号 / 制表符 / 竖线分隔均可；# 开头为注释；也可直接粘贴导出的 JSON</label>
+              <textarea id="glossaryPasteInput" rows="5" placeholder="Kubernetes → 容器编排系统&#10;Rust，系统编程语言&#10;Go | 编程语言&#10;# 注释行会被跳过"></textarea>
+              <div class="btn-row">
+                <button id="glossaryPasteApply" class="btn-primary-s" type="button">解析并追加</button>
+                <button id="glossaryPasteCancel" class="btn-secondary-s" type="button">取消</button>
+              </div>
+            </div>
+            <div id="glossaryStatus" class="status-line" role="status"></div>
+          </div>
+          <div class="card">
+            <div class="block-label">划词查词</div>
+            <div class="setting-row no-border toggle-row">
+              <div class="row-main">
+                <div class="row-label">选中网页文字后弹出词卡</div>
+                <div class="row-desc">用当前 AI 服务商给出音标、词性、释义与例句；输入框内划词与整段误选不触发。DeepL、腾讯、微软、谷歌无语言模型，需配置 AI 服务商后方可用</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="selectionLookupEnabled" />
+                <span class="knob"></span>
+              </label>
+            </div>
+            <div class="setting-row toggle-row">
+              <div class="row-main">
+                <div class="row-label">悬停查词</div>
+                <div class="row-desc">鼠标停在单词上片刻即出词卡（默认关闭：被动弹卡会打断阅读）。移开即收，同一词只查一次</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="selectionHoverEnabled" />
+                <span class="knob"></span>
+              </label>
+            </div>
+          </div>
         </section>
 
         <section id="sec-style" class="group">
@@ -889,6 +985,18 @@
               <span class="style-hint">跟随原文 或 指定系统字体</span>
             </div>
 
+            <div class="block-label">悬浮按钮</div>
+            <div class="style-row">
+              <span class="style-name">按钮大小</span>
+              <input id="floatSize" type="range" min="26" max="48" step="1" value="32" aria-label="悬浮按钮直径（像素）" />
+              <span id="floatSizeValue" class="size-value">32px</span>
+            </div>
+            <div class="style-row">
+              <span class="style-name">闲置不透明度</span>
+              <input id="floatOpacity" type="range" min="0.4" max="1" step="0.05" value="0.9" aria-label="悬浮按钮闲置不透明度（下限 0.4 保证可发现性）" />
+              <span id="floatOpacityValue" class="size-value">90%</span>
+            </div>
+
             <div class="preview-card">
               <div class="preview-tag">预览</div>
               <div class="preview-note">100% 与原文同尺寸；字号、行高与间距按每段原文分别计算。</div>
@@ -917,6 +1025,27 @@
               </div>
               <label class="switch">
                 <input type="checkbox" id="subtitleEnabled" />
+                <span class="knob"></span>
+              </label>
+            </div>
+
+            <div class="setting-row toggle-row">
+              <div class="row-main">
+                <div class="row-label">X（Twitter）站字幕</div>
+                <div class="row-desc">总开关开启时，是否也在 X 视频页翻译字幕</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="subtitleXEnabled" />
+                <span class="knob"></span>
+              </label>
+            </div>
+            <div class="setting-row toggle-row">
+              <div class="row-main">
+                <div class="row-label">AI 断句</div>
+                <div class="row-desc">用当前 AI 服务商优化字幕断句（DeepL 等传统翻译无语言模型，自动跳过）</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="subtitleAiSegmentation" />
                 <span class="knob"></span>
               </label>
             </div>
@@ -1028,6 +1157,131 @@
           </div>
         </section>
 
+        <section id="sec-tts" class="group">
+          <div class="group-head">
+            <h2>朗读</h2>
+            <p>划词词卡「朗读」使用系统语音合成（零依赖）；音色来自操作系统，Edge 云端音色不在支持范围</p>
+          </div>
+          <div class="card">
+            <div class="block-label">朗读</div>
+            <p class="model-hint">划词词卡上的「朗读」使用系统语音合成（零依赖）。音色来自你的操作系统；Edge 云端音色不在支持范围。</p>
+            <div class="style-row">
+              <span class="style-name">语速</span>
+              <input id="ttsRate" type="range" min="0.5" max="2" step="0.1" value="1" aria-label="朗读语速倍率" />
+              <span id="ttsRateValue" class="size-value">1.0×</span>
+            </div>
+            <div class="field no-sep">
+              <label for="ttsVoice">音色</label>
+              <select id="ttsVoice" class="model-select" style="width: 100%;"></select>
+              <div class="model-hint" id="ttsVoiceHint">音色列表异步加载，若为空请点「重新加载音色」。</div>
+            </div>
+            <div class="btn-row">
+              <button id="ttsReloadVoices" class="btn-secondary-s" type="button">重新加载音色</button>
+              <button id="ttsPreview" class="btn-secondary-s" type="button">试听</button>
+            </div>
+            <div class="setting-row no-border" style="padding-top: var(--space-2);">
+              <div class="row-main">
+                <div class="row-label">使用 Edge 云端语音</div>
+                <div class="row-desc">音色更自然。属非公开协议，可能随时失效；关闭时使用系统语音，朗读失败也会自动回退</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="ttsEdgeEnabled" />
+                <span class="knob"></span>
+              </label>
+            </div>
+            <div class="field no-sep" id="ttsEdgePanel" hidden>
+              <label for="ttsEdgeVoice">云端音色</label>
+              <select id="ttsEdgeVoice" class="model-select" style="width: 100%;"></select>
+              <div class="model-hint" id="ttsEdgeHint">音色列表由扩展后台拉取；朗读译文时优先匹配目标语言的音色。</div>
+            </div>
+            <div id="ttsStatus" class="status-line" role="status"></div>
+          </div>
+        </section>
+
+        <section id="sec-vocab" class="group">
+          <div class="group-head">
+            <h2>生词本</h2>
+            <p>划词卡「收藏」的生词自动带上下文与出处；数据存本机，可导出 CSV / JSON 备份</p>
+          </div>
+          <div class="card">
+            <div class="btn-row">
+              <button id="vocabAnkiExport" class="btn-secondary-s" type="button">导出到 Anki</button>
+              <input id="vocabSearch" type="text" placeholder="搜索单词 / 译名 / 上下文" style="flex:1; min-width: 160px;" />
+              <button id="vocabExportCsv" class="btn-secondary-s" type="button">导出 CSV</button>
+              <button id="vocabExportJson" class="btn-secondary-s" type="button">导出 JSON</button>
+              <button id="vocabClear" class="btn-small danger" type="button">清空</button>
+            </div>
+            <div id="vocabList" class="vocab-list"></div>
+            <div id="vocabEmpty" class="model-hint" hidden>还没有收藏生词：在网页里划词查询后点词卡上的「收藏」即可。</div>
+            <div id="vocabAnkiStatus" class="status-line" role="status"></div>
+            <div id="vocabStatus" class="status-line" role="status"></div>
+          </div>
+        </section>
+
+        <section id="sec-rules" class="group">
+          <div class="group-head">
+            <h2>站点规则</h2>
+            <p>修复「该翻没翻 / 不该翻翻了」的站点；个人规则优先于订阅规则</p>
+          </div>
+          <div class="card">
+            <div class="block-label">我的规则</div>
+            <p class="model-hint">站点匹配：<code>example.com</code> 精确；<code>*.example.com</code> 含子域。CSS 选择器每行一条。「强捞」把被剪枝器漏掉的正文拉回来（如站点误标的 <code>.notranslate</code>）。</p>
+            <div class="btn-row">
+              <input id="ruleName" type="text" placeholder="规则名称，如「正文强捞」" style="flex:1; min-width: 140px;" />
+              <input id="ruleHost" type="text" placeholder="example.com 或 *.example.com" style="flex:1; min-width: 140px;" />
+            </div>
+            <div class="field">
+              <label for="ruleInclude">包含选择器（可选，配合强捞）</label>
+              <textarea id="ruleInclude" rows="2" placeholder=".article-body, main p"></textarea>
+            </div>
+            <div class="field">
+              <label for="ruleExclude">排除选择器（可选）</label>
+              <textarea id="ruleExclude" rows="2" placeholder=".related-articles, .comments"></textarea>
+            </div>
+            <div class="setting-row no-border" style="padding-top: var(--space-2);">
+              <div class="row-main">
+                <div class="row-label">强捞剪枝掉的正文</div>
+                <div class="row-desc">开启后，包含选择器命中的元素绕过剪枝器直接进入翻译</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="ruleForce" />
+                <span class="knob"></span>
+              </label>
+            </div>
+            <div class="btn-row">
+              <button id="rulePickElement" class="btn-secondary-s" type="button">拾取元素</button>
+              <button id="ruleSave" class="btn-primary-s" type="button">保存规则</button>
+              <button id="ruleEditCancel" class="btn-secondary-s" type="button" hidden>取消编辑</button>
+            </div>
+            <div class="model-hint" id="rulePickHint">「拾取元素」切到目标网页点击元素，选择器与站点自动回填；生成的选择器可再手工编辑。</div>
+            <div id="ruleStatus" class="status-line" role="status"></div>
+            <div id="ruleList" class="profile-list"></div>
+            <div id="ruleEmpty" class="model-hint" hidden>还没有个人规则。大多数站点开箱即翻；只在遇到问题时才需要规则。</div>
+          </div>
+          <div class="card">
+            <div class="block-label">规则仓库（订阅）</div>
+            <p class="model-hint">订阅社区维护的规则仓库（JSON 格式，见 <code>docs/site-rules.md</code>）。拉取在扩展后台完成并缓存 24 小时；翻译时只读缓存，不打网络。</p>
+            <div class="btn-row">
+              <input id="ruleSubUrl" type="text" placeholder="https://example.com/site-rules.json" style="flex:1; min-width: 160px;" />
+              <button id="ruleSubAdd" class="btn-secondary-s" type="button">添加</button>
+            </div>
+            <div id="ruleSubList" class="profile-list"></div>
+            <div class="btn-row">
+              <button id="ruleSubRefresh" class="btn-secondary-s" type="button">立即更新订阅</button>
+            </div>
+            <div id="ruleSubStatus" class="status-line" role="status"></div>
+          </div>
+          <div class="card">
+            <div class="block-label">试运行</div>
+            <p class="model-hint">在目标网页控制台执行下面这行，5 秒内高亮规则命中的元素并在控制台回报数量：</p>
+            <div class="btn-row">
+              <input id="rulePreviewCmd" type="text" readonly value="document.dispatchEvent(new CustomEvent('moyi:preview-site-rules'))" style="flex:1; font-family: monospace;" />
+              <button id="rulePreviewCopy" class="btn-secondary-s" type="button">复制</button>
+            </div>
+            <div id="rulePreviewStatus" class="status-line" role="status"></div>
+          </div>
+        </section>
+
         <section id="sec-shortcuts" class="group">
           <div class="group-head">
             <h2>快捷键</h2>
@@ -1050,6 +1304,22 @@
               <kbd id="restoreShortcutDisplay" class="key shortcut-kbd" role="button" tabindex="0" title="点击设置快捷键">设置</kbd>
               <button id="clearRestoreShortcut" class="btn-small" type="button" hidden>清除</button>
             </div>
+            <div class="setting-row">
+              <div class="row-main">
+                <div class="row-label">输入框翻译</div>
+                <div class="row-desc">在输入框/可编辑区域按下组合键翻译选中文字（无选区则整篇草稿），浮层内点「替换」才写回</div>
+              </div>
+              <kbd id="inputTranslateShortcutDisplay" class="key shortcut-kbd" role="button" tabindex="0" title="点击设置快捷键">设置</kbd>
+              <button id="clearInputTranslateShortcut" class="btn-small" type="button" hidden>清除</button>
+            </div>
+            <div class="setting-row">
+              <div class="row-main">
+                <div class="row-label">划词查词</div>
+                <div class="row-desc">选中网页文字后按组合键出词卡（不用鼠标时用）</div>
+              </div>
+              <kbd id="lookupShortcutDisplay" class="key shortcut-kbd" role="button" tabindex="0" title="点击设置快捷键">设置</kbd>
+              <button id="clearLookupShortcut" class="btn-small" type="button" hidden>清除</button>
+            </div>
             <div class="setting-row no-border">
               <div class="row-main">
                 <div class="row-desc">系统级快捷键仍由 Chrome 管理，可在下方设置中调整</div>
@@ -1058,6 +1328,65 @@
             </div>
           </div>
         </section>
+
+
+        <section id="sec-sync" class="group">
+          <div class="group-head">
+            <h2>备份与同步</h2>
+            <p>备份与历史快照均不含 API Key，恢复时沿用当前凭据</p>
+          </div>
+          <div class="card">
+            <div class="block-label">备份与恢复</div>
+            <p class="model-hint">导出全量配置（服务商、风格、样式、术语表、快捷键）为 JSON；换设备或换浏览器时导入即可。</p>
+            <div class="btn-row">
+              <button id="configExport" class="btn-secondary-s" type="button">导出备份</button>
+              <button id="configImport" class="btn-secondary-s" type="button">导入备份</button>
+              <input id="configFile" type="file" accept=".json,application/json" hidden />
+            </div>
+            <div class="block-label">配置历史</div>
+            <div id="configHistoryList" class="profile-list"></div>
+            <div id="configHistoryEmpty" class="model-hint" hidden>暂无历史。导入备份、切换场景或从 WebDAV 下载时会自动留档。</div>
+            <div id="configBackupStatus" class="status-line" role="status"></div>
+          </div>
+          <div class="card">
+            <div class="block-label">WebDAV 同步</div>
+            <p class="model-hint">坚果云、Nextcloud 等支持 WebDAV 的网盘。密码与 API Key 同样只存本机，不随备份外传。</p>
+            <div class="field">
+              <label for="webdavUrl">目录地址</label>
+              <input id="webdavUrl" type="text" placeholder="https://dav.jianguoyun.com/dav/" />
+            </div>
+            <div class="setting-row no-border" style="padding-top: var(--space-2);">
+              <div class="row-main"><div class="row-label">账号</div></div>
+              <input id="webdavUsername" type="text" placeholder="WebDAV 账号" style="width: 200px;" />
+            </div>
+            <div class="setting-row no-border" style="padding-top: var(--space-2);">
+              <div class="row-main"><div class="row-label">密码</div></div>
+              <input id="webdavPassword" type="password" placeholder="应用专用密码" style="width: 200px;" />
+            </div>
+            <div class="field no-sep">
+              <label for="webdavPath">文件名</label>
+              <input id="webdavPath" type="text" placeholder="moyi-config.json" />
+            </div>
+            <div class="btn-row">
+              <button id="webdavTest" class="btn-secondary-s" type="button">测试连接</button>
+              <button id="webdavUpload" class="btn-secondary-s" type="button">上传备份</button>
+              <button id="webdavDownload" class="btn-secondary-s" type="button">下载并应用</button>
+            </div>
+            <div id="webdavStatus" class="status-line" role="status"></div>
+          </div>
+          <div class="card">
+            <div class="block-label">场景 Profile</div>
+            <p class="model-hint">把「服务商 + 提示词风格 + 译文样式 + 悬浮球外观」存成命名组合，一键切换（如「学术精读」「社媒快读」）。不含凭据与术语表。</p>
+            <div class="btn-row">
+              <input id="profileName" type="text" placeholder="场景名称，如「学术精读」" style="flex:1; min-width: 160px;" />
+              <button id="profileSave" class="btn-secondary-s" type="button">保存当前为场景</button>
+            </div>
+            <div id="profileList" class="profile-list"></div>
+            <div id="profileEmpty" class="model-hint" hidden>还没有场景：配好服务商与风格后保存一个。</div>
+            <div id="profileStatus" class="status-line" role="status"></div>
+          </div>
+        </section>
+
 
         <section id="sec-settings" class="group">
           <div class="group-head">
@@ -1081,7 +1410,6 @@
             </div>
           </div>
         </section>
-
 
         <section id="sec-about" class="group narrow">
           <div class="group-head">

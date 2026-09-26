@@ -6,13 +6,18 @@ import { getProviderMeta } from '../../utils/providers';
 import { beginTranslation, getActiveElements, getTranslationState } from './translationState';
 import { renderPartialTranslation, renderTranslation, renderTranslationError, restoreTranslation } from './translationRenderer';
 import { BatchingScheduler } from '../../utils/concurrency';
+import type { CompiledRuleSet } from '../../utils/siteRules';
+import { EMPTY_RULE_SET } from '../../utils/siteRules';
 import { logger } from '../../utils/logger';
 import { cacheKey, loadTranslationCache, saveTranslationCache, type TranslationCache } from './translationCache';
 
-/** 单批段落数：与 6000 字符输入预算、max_tokens=8192、30s 空闲超时配合。
- *  小段落长文下批越大往返越少（请求数 ≈ 段数÷批大小），并发仍为 3 不变。 */
-const BATCH_SIZE = 8;
+/** 单批段落数上限（动态装箱）：字符预算（6000）为主约束、条数为硬上限——
+ *  短段落长文下批越大往返越少（请求数 ≈ 段数÷批上限），长段落由预算自动缩批；
+ *  并发仍为 3。输出侧安全网不变：max_tokens=8192 + finish_reason=length 截断检测。 */
+export const DEFAULT_MAX_BATCH_SIZE = 16;
 const CONCURRENCY = 3;
+/** 跨批上文窗口：同文档相邻已入队原文段，注入 prompt 保持术语/指代一致。 */
+const CONTEXT_PARAGRAPHS = 3;
 const VIEWPORT_AHEAD = 300;
 /** OpenAI 后端单批输入字符预算：译文输出与输入近似等长，多段长文本成批
  *  会顶穿 max_tokens=8192 被 finish_reason=length 截断（"翻一半断掉"的根因之一）。
@@ -28,6 +33,12 @@ const RESCAN_THROTTLE_MS = 400;
 let pageGeneration = 0;
 let pageContext = '';
 let translatedCount = 0;
+/** 入队序号与原文登记表：上下文提取用（enqueue 顺序 ≈ 文档顺序）。
+ *  缓存命中段落不入队也不登记——上文窗口基于本会话实际翻译的段落。 */
+let enqueueSeq = 0;
+let sessionTexts: string[] = [];
+/** 当前会话的站点规则集：由 content/main 依据配置+订阅缓存编译后注入（空集=默认行为）。 */
+let sessionRuleSet: CompiledRuleSet = EMPTY_RULE_SET;
 let activeScheduler: BatchingScheduler<TranslationItem> | null = null;
 let activeOffscreen: OffscreenController | null = null;
 /** 本会话已发现的候选（初始扫描 + 滚动补扫）：补扫时交给引擎跳过，防止重复入队与嵌套重译。 */
@@ -77,7 +88,7 @@ const acceptCandidate = (
     }
   }
   return {
-    item: { text: candidate.text, element: candidate.element, typography: candidate.typography },
+    item: { text: candidate.text, element: candidate.element, typography: candidate.typography, seq: -1 },
     outcome: 'queue',
   };
 };
@@ -88,10 +99,18 @@ const cancelInFlight = (): void => {
   rescanCleanup?.();
   rescanCleanup = null;
   sessionKnown = null;
+  enqueueSeq = 0;
+  sessionTexts = [];
   for (const stream of activeStreams) stream.abort();
   activeStreams.clear();
   activeScheduler?.clear();
   activeScheduler = null;
+};
+
+/** 批首段之前登记的相邻原文（末 CONTEXT_PARAGRAPHS 段，用于跨批上下文）。 */
+const precedingFor = (seq: number): string[] => {
+  if (seq < 0) return [];
+  return sessionTexts.slice(Math.max(0, seq - CONTEXT_PARAGRAPHS), seq);
 };
 
 export const restoreAllTranslations = (): void => {
@@ -116,6 +135,8 @@ interface TranslationItem {
   text: string;
   element: HTMLElement;
   typography: ElementTypography;
+  /** 入队序号（enqueueItems 赋值；-1 为未入队哨兵）。 */
+  seq: number;
 }
 
 /** 视口外内容的双窗口观察器：近窗口到达插队、预取窗口排队；支持补扫追加新候选。 */
@@ -159,7 +180,7 @@ const runBatch = async (items: TranslationItem[], generation: number): Promise<v
 
   if (items.length === 1) {
     try {
-      const translation = await requestTranslation(items[0].text);
+      const translation = await requestTranslation(items[0].text, precedingFor(items[0].seq));
       if (generation === pageGeneration) {
         if (renderTranslation(items[0].element, translation, states[0].generation, items[0].typography)) {
           translatedCount += 1;
@@ -180,6 +201,9 @@ const runBatch = async (items: TranslationItem[], generation: number): Promise<v
       items.map((item) => item.text),
       {
         pageContext,
+        precedingParagraphs: precedingFor(items[0].seq),
+        // 让 background 保持本批整体（≤上限），不在其内部按 10 再切
+        maxBatchSize: DEFAULT_MAX_BATCH_SIZE,
         onPartial: (index, text) => {
           if (generation !== pageGeneration) return;
           renderPartialTranslation(items[index].element, text, states[index].generation, items[index].typography);
@@ -290,13 +314,13 @@ const observeOffscreen = (
  *  新发现的近窗口项插队入队；其余交给双观察器——到达近窗口即抢占，落入预取窗口即排队。 */
 const startRescan = (
   generation: number,
-  scheduler: BatchingScheduler<TranslationItem>,
+  enqueueItems: (items: TranslationItem[], options?: { front?: boolean }) => void,
   controller: OffscreenController | null,
 ): void => {
   const run = (): void => {
     const known = sessionKnown;
     if (generation !== pageGeneration || known === null) return;
-    const fresh = findTranslationCandidates(document.body, MAX_CANDIDATES_PER_SCAN, known);
+    const fresh = findTranslationCandidates(document.body, MAX_CANDIDATES_PER_SCAN, known, sessionRuleSet);
     if (fresh.length === 0) return;
     const near: TranslationItem[] = [];
     const far: TranslationItem[] = [];
@@ -316,10 +340,10 @@ const startRescan = (
       skipped,
       knownSize: known.size,
     });
-    if (near.length > 0) scheduler.enqueue(near, { front: true });
+    if (near.length > 0) enqueueItems(near, { front: true });
     if (far.length > 0) {
       if (controller) controller.observeMore(far);
-      else scheduler.enqueue(far); // 无 IntersectionObserver：与初始全量入队兜底保持一致
+      else enqueueItems(far); // 无 IntersectionObserver：与初始全量入队兜底保持一致
     }
   };
   let scrollTimer: number | undefined;
@@ -338,6 +362,11 @@ const startRescan = (
   };
 };
 
+/** 注入会话规则集（main 每次翻译前按 host 编译后调用）。 */
+export const setSessionRuleSet = (ruleSet: CompiledRuleSet): void => {
+  sessionRuleSet = ruleSet;
+};
+
 export const translatePage = async (maxBatchSize?: number): Promise<{ translated: number; skipped: number; deferred: number; cached?: number }> => {
   updatePageContext();
   const generation = ++pageGeneration;
@@ -348,7 +377,7 @@ export const translatePage = async (maxBatchSize?: number): Promise<{ translated
   await startCacheSession(config.targetLanguage);
   sessionBackend = getProviderMeta(config.providerId).kind === 'mt' ? 'mt' : 'openai';
 
-  const candidates = findTranslationCandidates(document.body, MAX_CANDIDATES_PER_SCAN);
+  const candidates = findTranslationCandidates(document.body, MAX_CANDIDATES_PER_SCAN, undefined, sessionRuleSet);
   logger.info('content.page_translation.start', { generation, candidates: candidates.length, url: location.href });
   // 会话已知集：滚动补扫时引擎据此跳过，只返回第 101+ 段的新候选
   sessionKnown = new Set<HTMLElement>(candidates.map((candidate) => candidate.element));
@@ -378,7 +407,7 @@ export const translatePage = async (maxBatchSize?: number): Promise<{ translated
     else offscreen.push(item);
   }
 
-  const effectiveBatchSize = Math.max(1, Math.min(maxBatchSize ?? BATCH_SIZE, 10));
+  const effectiveBatchSize = Math.max(1, Math.min(maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE));
   const scheduler = new BatchingScheduler<TranslationItem>({
     batchSize: effectiveBatchSize,
     concurrency: CONCURRENCY,
@@ -389,8 +418,19 @@ export const translatePage = async (maxBatchSize?: number): Promise<{ translated
   });
   activeScheduler = scheduler;
 
+  /** 入队并登记序号/原文：上下文窗口按 enqueue 顺序取相邻段
+   *  （初始扫描与补扫均按文档顺序入队；跳读抢占的插队项序号仍按到达时刻登记，属可接受近似）。 */
+  const enqueueItems = (items: TranslationItem[], options?: { front?: boolean }): void => {
+    for (const item of items) {
+      item.seq = enqueueSeq;
+      sessionTexts[enqueueSeq] = item.text;
+      enqueueSeq += 1;
+    }
+    scheduler.enqueue(items, options);
+  };
+
   let scrollEnqueued = 0;
-  scheduler.enqueue(visible);
+  enqueueItems(visible);
 
   let controller: OffscreenController | null = null;
   if (offscreen.length > 0) {
@@ -400,24 +440,24 @@ export const translatePage = async (maxBatchSize?: number): Promise<{ translated
         if (generation !== pageGeneration) return;
         scrollEnqueued += batch.length;
         // 近窗口 = 用户正在到达：插队压过仍在队中的预取积压
-        scheduler.enqueue(batch, { front: true });
+        enqueueItems(batch, { front: true });
       },
       (batch) => {
         if (generation !== pageGeneration) return;
         scrollEnqueued += batch.length;
-        scheduler.enqueue(batch);
+        enqueueItems(batch);
       },
     );
   }
   activeOffscreen = controller;
   if (offscreen.length > 0 && controller === null) {
     // 无 IntersectionObserver：全量入队（既有兜底，等价于全文预翻译）
-    scheduler.enqueue(offscreen);
+    enqueueItems(offscreen);
     scrollEnqueued = offscreen.length;
   }
   if (sessionKnown !== null && sessionKnown.size >= MAX_CANDIDATES_PER_SCAN) {
     // 首扫已达单次上限：文档可能还有第 101+ 段，挂滚动补扫
-    startRescan(generation, scheduler, controller);
+    startRescan(generation, enqueueItems, controller);
   }
 
   await scheduler.waitForIdle();

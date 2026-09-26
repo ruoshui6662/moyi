@@ -1,11 +1,14 @@
-import { buildBatchMessages, buildMessages } from './templates';
+import { buildBatchMessages, buildMessages, buildPrecedingContextBlock } from './templates';
 import { logger } from '../utils/logger';
+import { filterGlossaryHits, type GlossaryEntry } from '../utils/glossary';
 import type { TranslationPromptStyle } from '../utils/prompts';
 
 export interface PromptOptions {
   promptStyle?: TranslationPromptStyle;
   useCustomPrompt?: boolean;
   customPrompt?: string;
+  /** 完整术语表；发送前按本批段落做命中过滤，只注入命中项。 */
+  glossary?: readonly GlossaryEntry[];
 }
 
 export interface TranslationRequest extends PromptOptions {
@@ -16,6 +19,9 @@ export interface TranslationRequest extends PromptOptions {
   model: string;
   maxTokens?: number;
   disableReasoning?: boolean;
+  /** 跨批上文（同文档已入队的相邻原文段）：仅注入 prompt 保持一致性，
+   *  不参与段落缓存 key——缓存命中段落按缓存译文渲染，接受轻微措辞不一致。 */
+  precedingParagraphs?: string[];
 }
 
 export interface BatchTranslationRequest extends Omit<TranslationRequest, 'text'> {
@@ -32,9 +38,22 @@ export class TranslationServiceError extends Error {
 }
 
 /** 可安全重试的失败：瞬时网关错误（408/502/503/504）与网络层错误。
- * 429 尊重限流（保留带重置时间的既有提示，不重试）；超时与主动 abort 不重试——重试只会更慢。 */
+ * 429 单独处理：服务端给出可执行的 Retry-After（≤30s）时等待一次再试；
+ * 超时与主动 abort 不重试——超时重试只会更慢，主动 abort 是用户意图。 */
 const RETRYABLE_STATUS: ReadonlySet<number> = new Set([408, 502, 503, 504]);
 const RETRY_DELAYS_MS = [1000, 3000] as const;
+/** 429 等待上限：超过则放弃重试（把用户挂死在未知时长上不如直接报错）。 */
+const MAX_429_WAIT_MS = 30_000;
+
+/** 解析 Retry-After（秒数或 HTTP 日期）为毫秒；缺失/非法返回 null。 */
+const parseRetryAfterMs = (response: Response): number | null => {
+  const header = response.headers.get('retry-after');
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+};
 
 const isRetryableRequestError = (error: unknown): boolean => {
   if (error instanceof TranslationServiceError) {
@@ -46,8 +65,10 @@ const isRetryableRequestError = (error: unknown): boolean => {
 
 /** 只包住「发起请求到拿到响应头」这一步：已开始接收正文的流绝不重试，避免重复渲染与重复计费。
  *  网络层错误（TypeError）与瞬时 HTTP 状态（408/502/503/504）共享 2 次重试预算；
- *  非可重试状态原样返回给调用方，由 throwHttpError 统一处理（429 文案等保持不变）。 */
+ *  429 走单独通道：带可执行 Retry-After（≤30s）时等待一次，否则原样返回给调用方
+ *  由 throwHttpError 统一处理（既有 429 文案保持不变）。 */
 const fetchWithRetry = async (input: string, init: RequestInit): Promise<Response> => {
+  let retriedRateLimit = false;
   for (let attempt = 0; ; attempt += 1) {
     const canRetry = attempt < RETRY_DELAYS_MS.length;
     let response: Response;
@@ -60,6 +81,18 @@ const fetchWithRetry = async (input: string, init: RequestInit): Promise<Respons
         globalThis.setTimeout(resolve, RETRY_DELAYS_MS[attempt]);
       });
       continue;
+    }
+    if (!response.ok && response.status === 429 && !retriedRateLimit) {
+      const waitMs = parseRetryAfterMs(response);
+      if (waitMs !== null && waitMs <= MAX_429_WAIT_MS) {
+        retriedRateLimit = true;
+        void response.body?.cancel().catch(() => undefined);
+        logger.warn('provider.request.retry_rate_limit', { waitMs });
+        await new Promise<void>((resolve) => {
+          globalThis.setTimeout(resolve, Math.max(waitMs, 100));
+        });
+        continue;
+      }
     }
     if (response.ok || !canRetry || !RETRYABLE_STATUS.has(response.status)) return response;
     logger.warn('provider.request.retry', { attempt: attempt + 1, delayMs: RETRY_DELAYS_MS[attempt], status: response.status });
@@ -481,7 +514,8 @@ export const translateWithOpenAICompatible = async (
           promptStyle: request.promptStyle,
           useCustomPrompt: request.useCustomPrompt,
           customPrompt: request.customPrompt,
-        }),
+          glossary: filterGlossaryHits(request.glossary, [request.text]),
+        }, buildPrecedingContextBlock(request.precedingParagraphs ?? [])),
       }),
     });
 
@@ -566,6 +600,8 @@ export interface PlainCompletionRequest {
   model: string;
   system: string;
   user: string;
+  /** 多轮续写（阅读卡追问）：按序拼在首轮 user 之后，构成完整会话。 */
+  history?: readonly { role: 'user' | 'assistant'; content: string }[];
   maxTokens?: number;
   timeoutMs?: number;
 }
@@ -609,6 +645,7 @@ export const completeWithOpenAICompatible = async (
         messages: [
           { role: 'system', content: request.system },
           { role: 'user', content: request.user },
+          ...(request.history ?? []).map((turn) => ({ role: turn.role, content: turn.content })),
         ],
       }),
     });
@@ -713,7 +750,8 @@ const requestBatch = async (
   const disableReasoning = request.disableReasoning ?? false;
   const requestOverrides = disableReasoning ? { enable_thinking: false as const, thinking: { type: 'disabled' as const } } : {};
   const context = (request.pageContext ?? '').trim();
-  const contextSuffix = context ? `Context for translation: ${context}` : '';
+  const precedingBlock = buildPrecedingContextBlock(request.precedingParagraphs ?? []);
+  const contextSuffix = [context ? `Context for translation: ${context}` : '', precedingBlock].filter(Boolean).join('\n\n');
 
   logger.info('provider.request.start', {
     url,
@@ -744,7 +782,7 @@ const requestBatch = async (
         temperature: 0,
         max_tokens: maxTokens,
         ...requestOverrides,
-        messages: buildBatchMessages(paragraphs, request.targetLanguage, contextSuffix, { promptStyle: request.promptStyle, useCustomPrompt: request.useCustomPrompt, customPrompt: request.customPrompt }),
+        messages: buildBatchMessages(paragraphs, request.targetLanguage, contextSuffix, { promptStyle: request.promptStyle, useCustomPrompt: request.useCustomPrompt, customPrompt: request.customPrompt, glossary: filterGlossaryHits(request.glossary, paragraphs) }),
       }),
     });
 
@@ -895,7 +933,8 @@ export const streamTranslateBatch = async (
   const disableReasoning = request.disableReasoning ?? false;
   const requestOverrides = disableReasoning ? { enable_thinking: false as const, thinking: { type: 'disabled' as const } } : {};
   const context = (request.pageContext ?? '').trim();
-  const contextSuffix = context ? `Context for translation: ${context}` : '';
+  const precedingBlock = buildPrecedingContextBlock(request.precedingParagraphs ?? []);
+  const contextSuffix = [context ? `Context for translation: ${context}` : '', precedingBlock].filter(Boolean).join('\n\n');
   const parser = createTagStreamParser(paragraphs.length);
   // 最近一帧的 finish_reason：SSE 流与整段 JSON 回退两条路径共用（识别 length 截断）
   let finishReason: string | null = null;
@@ -952,7 +991,7 @@ export const streamTranslateBatch = async (
         max_tokens: maxTokens,
         stream: true,
         ...requestOverrides,
-        messages: buildBatchMessages(paragraphs, request.targetLanguage, contextSuffix, { promptStyle: request.promptStyle, useCustomPrompt: request.useCustomPrompt, customPrompt: request.customPrompt }),
+        messages: buildBatchMessages(paragraphs, request.targetLanguage, contextSuffix, { promptStyle: request.promptStyle, useCustomPrompt: request.useCustomPrompt, customPrompt: request.customPrompt, glossary: filterGlossaryHits(request.glossary, paragraphs) }),
       }),
     });
 

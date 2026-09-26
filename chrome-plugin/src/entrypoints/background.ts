@@ -5,6 +5,23 @@ import { SEGMENTATION_SYSTEM_PROMPT } from '../utils/subtitles/ai-segmenter';
 import { getProviderMeta, isMtProviderId, isNoKeyMtProviderId, parseModelsPayload, resolveProviderSettings } from '../utils/providers';
 import { describeOllamaAccessError, isOllamaProviderId, prepareExtensionProviderConfig, prepareExtensionRequestApiKey } from '../utils/extensionProviders';
 import { getConfig, type TranslatorConfig } from '../utils/config';
+import { applyGlossaryReplacements } from '../utils/glossary';
+import { fetchRuleRepository } from '../utils/ruleRepository';
+import { exportVocabToAnki } from '../utils/anki';
+import { savePickedElement } from '../utils/pickedElement';
+import { EDGE_TTS_VOICES_ENDPOINT, bytesToBase64, synthesizeEdgeSpeech, type EdgeVoice } from '../utils/edgeTts';
+import {
+  FOLLOWUP_SYSTEM_SUFFIX,
+  buildExplainSystemPrompt,
+  buildExplainUserPrompt,
+  buildLookupSystemPrompt,
+  buildLookupUserPrompt,
+  classifyLookupKind,
+  normalizeSelectionText,
+  parseExplainResponse,
+  parseLookupResponse,
+  sanitizeExplainLevel,
+} from '../utils/selectionLookup';
 import { logger } from '../utils/logger';
 
 /** 当前启用服务商的后端类型：传统 MT（DeepL / 腾讯翻译）无模型、无提示词、无流式。 */
@@ -41,6 +58,10 @@ const sanitizeParagraphs = (value: unknown): string[] => {
 
 const sanitizePageContext = (value: unknown): string =>
   typeof value === 'string' ? value.slice(0, MAX_PAGE_CONTEXT_CHARS) : '';
+
+/** 跨批上文：最多 3 段、单段 ≤800 字符（与 templates 上文块契约一致；只入 prompt 不入缓存）。 */
+const sanitizePrecedingParagraphs = (value: unknown): string[] =>
+  sanitizeParagraphs(value).slice(-3).map((text) => text.slice(0, 800));
 
 /** 消息是否来自扩展自身页面（options/popup），而非注入到网页的 content script。 */
 const isExtensionPageSender = (sender: chrome.runtime.MessageSender): boolean =>
@@ -124,9 +145,10 @@ export default defineBackground(() => {
       if (!message || typeof message !== 'object') return;
       const type = (message as { type?: string }).type;
       if (type !== 'start') return;
-      const { paragraphs, pageContext } = message as { type: 'start'; paragraphs: string[]; pageContext?: string };
+      const { paragraphs, pageContext, precedingParagraphs } = message as { type: 'start'; paragraphs: string[]; pageContext?: string; precedingParagraphs?: string[] };
       const safeParagraphs = sanitizeParagraphs(paragraphs);
       const safeContext = sanitizePageContext(pageContext);
+      const safePreceding = sanitizePrecedingParagraphs(precedingParagraphs);
       void (async () => {
         abortController = new AbortController();
         let providerId = '';
@@ -136,7 +158,7 @@ export default defineBackground(() => {
           const requestConfig = prepareExtensionProviderConfig(config);
           logger.info('background.stream_translation.start', { paragraphCount: safeParagraphs.length, model: requestConfig.model });
           const { completedCount, truncated } = await streamTranslateBatch(
-            { ...requestConfig, paragraphs: safeParagraphs, pageContext: safeContext },
+            { ...requestConfig, paragraphs: safeParagraphs, pageContext: safeContext, precedingParagraphs: safePreceding },
             {
               onPartial: (index, text) => send({ type: 'partial', index, text }),
               onParagraph: (index, text) => send({ type: 'paragraph', index, text }),
@@ -157,7 +179,7 @@ export default defineBackground(() => {
   chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     if (!message || typeof message !== 'object') return undefined;
     const type = (message as { type?: string }).type;
-    if (type !== 'translate' && type !== 'translate-batch' && type !== 'test-connection' && type !== 'fetch-models' && type !== 'page-command' && type !== 'segment-subtitles') return undefined;
+    if (type !== 'translate' && type !== 'translate-batch' && type !== 'test-connection' && type !== 'fetch-models' && type !== 'page-command' && type !== 'segment-subtitles' && type !== 'lookup-word' && type !== 'explain-word' && type !== 'fetch-rule-repository' && type !== 'edge-tts-speak' && type !== 'edge-tts-voices' && type !== 'anki-export' && type !== 'element-picker-start') return undefined;
 
     logger.info('background.message.received', { type });
     void (async () => {
@@ -245,20 +267,24 @@ if (type === 'test-connection') {
 
         if (type === 'translate-batch') {
           activeProviderId = config.providerId;
-          const { paragraphs, maxBatchSize, pageContext } = message as { type: 'translate-batch'; paragraphs: string[]; maxBatchSize?: number; pageContext?: string };
+          const { paragraphs, maxBatchSize, pageContext, precedingParagraphs } = message as { type: 'translate-batch'; paragraphs: string[]; maxBatchSize?: number; pageContext?: string; precedingParagraphs?: string[] };
           const safeParagraphs = sanitizeParagraphs(paragraphs);
           const safeContext = sanitizePageContext(pageContext);
+          const safePreceding = sanitizePrecedingParagraphs(precedingParagraphs);
           logger.info('background.batch_translation.start', { paragraphCount: safeParagraphs.length, model: config.model, maxBatchSize, hasContext: Boolean(safeContext) });
           // 传统 MT 后端：整批直译（无流式、无提示词），由适配器保证 1:1 次序
           if (isMtBackend(config)) {
             const adapter = getMtAdapter(config.providerId);
-            const translations = await adapter.translateBatch(safeParagraphs, buildMtRequest(config));
+            const translations = applyGlossaryReplacements(
+              await adapter.translateBatch(safeParagraphs, buildMtRequest(config)),
+              config.glossary,
+            );
             logger.info('background.batch_translation.success', { backend: config.providerId, paragraphCount: safeParagraphs.length, outputCharacters: translations.join('').length });
             sendResponse({ ok: true, translations });
             return;
           }
           const requestConfig = prepareExtensionProviderConfig(config);
-          const translations = await translateBatchWithOpenAICompatible({ ...requestConfig, paragraphs: safeParagraphs, maxBatchSize, pageContext: safeContext });
+          const translations = await translateBatchWithOpenAICompatible({ ...requestConfig, paragraphs: safeParagraphs, maxBatchSize, pageContext: safeContext, precedingParagraphs: safePreceding });
           logger.info('background.batch_translation.success', { paragraphCount: safeParagraphs.length, outputCharacters: translations.join('').length });
           sendResponse({ ok: true, translations });
           return;
@@ -300,21 +326,167 @@ if (type === 'test-connection') {
           return;
         }
 
-        const { text } = message as { type: 'translate'; text: string };
+        if (type === 'element-picker-start') {
+          // 拾取器只能作用于普通网页：选当前窗口里最近访问的非扩展页
+          if (!isExtensionPageSender(sender)) throw new Error('该操作仅允许从扩展页面发起。');
+          const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+          const tabs = active ? [active] : await chrome.tabs.query({ currentWindow: true });
+          const target = tabs.find((t) => t.id !== undefined && /^https?:/.test(t.url ?? '') && !t.url?.startsWith(chrome.runtime.getURL('')));
+          if (!target?.id) {
+            sendResponse({ ok: false, error: '未找到目标网页：请先打开要拾取元素的页面，再回到设置页点「拾取元素」。' });
+            return;
+          }
+          await chrome.tabs.sendMessage(target.id, { type: 'element-picker-start' });
+          sendResponse({ ok: true, tabId: target.id, url: target.url });
+          return;
+        }
+
+        if (type === 'anki-export') {
+          // 生词本 → AnkiConnect（localhost 只能由扩展侧发起）
+          const { entries } = message as { entries?: unknown };
+          if (!Array.isArray(entries) || entries.length === 0) throw new Error('没有可导出的生词。');
+          if (entries.length > 1000) throw new Error('单次最多导出 1000 条，请先分批。');
+          const clean = entries.slice(0, 1000).map((raw) => {
+            const e = (raw ?? {}) as Record<string, unknown>;
+            const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+            return { word: str(e.word, 200), translation: str(e.translation, 500), context: str(e.context, 1000), pageTitle: str(e.pageTitle, 200), url: str(e.url, 500), createdAt: typeof e.createdAt === 'number' ? e.createdAt : 0 };
+          }).filter((e) => e.word);
+          const result = await exportVocabToAnki(clean);
+          logger.info('background.anki_export.success', { entries: clean.length, added: result.added });
+          sendResponse({ ok: true, ...result });
+          return;
+        }
+
+        if (type === 'edge-tts-speak') {
+          // Edge 云端语音：WebSocket 只能在扩展侧发起（内容脚本受页面 CSP/CORS 管辖）
+          if (!isExtensionPageSender(sender) && (sender.url?.startsWith('http') ?? true)) {
+            // 内容脚本也允许（词卡在页面里），但仅接受两个受控字段
+          }
+          const { text, voice, rate } = message as { text?: unknown; voice?: unknown; rate?: unknown };
+          if (typeof text !== 'string' || !text.trim()) throw new Error('没有可朗读的内容。');
+          if (typeof voice !== 'string' || !/^[a-z]{2,3}(-[A-Za-z]+)+$/.test(voice)) throw new Error('云端音色标识无效。');
+          const audio = await synthesizeEdgeSpeech({ text: text.slice(0, 2000), voice, rate: typeof rate === 'number' ? rate : 1 });
+          logger.info('background.edge_tts.success', { voice, bytes: audio.byteLength });
+          sendResponse({ ok: true, audio: bytesToBase64(audio) });
+          return;
+        }
+
+        if (type === 'edge-tts-voices') {
+          // 音色列表：仅扩展页可拉取（设置页用），8 秒超时
+          if (!isExtensionPageSender(sender)) throw new Error('该操作仅允许从扩展页面发起。');
+          const controller = new AbortController();
+          const timer = globalThis.setTimeout(() => controller.abort(), 8000);
+          try {
+            const response = await fetch(EDGE_TTS_VOICES_ENDPOINT, { signal: controller.signal });
+            if (!response.ok) throw new Error(`音色列表拉取失败（HTTP ${response.status}）。`);
+            const voices = (await response.json()) as EdgeVoice[];
+            sendResponse({ ok: true, voices: Array.isArray(voices) ? voices.slice(0, 200) : [] });
+          } finally {
+            globalThis.clearTimeout(timer);
+          }
+          return;
+        }
+
+        if (type === 'lookup-word') {
+          activeProviderId = config.providerId;
+          // 划词查词：非流式小补全；与 AI 断句同走 completeWithOpenAICompatible 通道。
+          const { text } = message as { type: 'lookup-word'; text?: unknown };
+          const query = typeof text === 'string' ? normalizeSelectionText(text) : null;
+          if (!query) throw new Error('没有可查询的划词内容。');
+          if (isMtBackend(config)) {
+            sendResponse({ ok: false, unsupported: true, error: '当前翻译服务（DeepL / 腾讯 / 微软 / 谷歌）无语言模型，划词查词需在设置中配置 AI 服务商。' });
+            return;
+          }
+          const requestConfig = prepareExtensionProviderConfig(config);
+          logger.info('background.lookup.start', { characters: query.length, model: requestConfig.model });
+          const raw = await completeWithOpenAICompatible({
+            endpoint: requestConfig.endpoint,
+            apiKey: requestConfig.apiKey,
+            model: requestConfig.model,
+            system: buildLookupSystemPrompt(config.targetLanguage),
+            user: buildLookupUserPrompt(query, classifyLookupKind(query)),
+            // 选段可达 500 字符，输出含释义+例句，800 tokens 偏紧
+            maxTokens: 1200,
+            timeoutMs: 30_000,
+          });
+          logger.info('background.lookup.success', { outputCharacters: raw.length });
+          sendResponse({ ok: true, result: parseLookupResponse(query, raw) });
+          return;
+        }
+
+        if (type === 'fetch-rule-repository') {
+          // 规则仓库拉取：只有扩展页（设置页）可发起——页面拿不到我们的网络身份
+          if (!isExtensionPageSender(sender)) throw new Error('该操作仅允许从扩展页面发起。');
+          const { url } = message as { type: 'fetch-rule-repository'; url?: unknown };
+          if (typeof url !== 'string' || !url.trim()) throw new Error('请填写规则仓库地址。');
+          const rules = await fetchRuleRepository(url);
+          logger.info('background.rule_repo.success', { rules: rules.length });
+          sendResponse({ ok: true, rules, fetchedAt: Date.now() });
+          return;
+        }
+
+        if (type === 'explain-word') {
+          activeProviderId = config.providerId;
+          // 阅读卡详解/追问：与查词同通道（openai 族非流式），历史仅透传不落盘
+          const request = message as {
+            text?: unknown; level?: unknown; context?: unknown; followup?: unknown;
+            history?: unknown;
+          };
+          const query = typeof request.text === 'string' ? normalizeSelectionText(request.text) : null;
+          if (!query) throw new Error('没有可讲解的划词内容。');
+          if (isMtBackend(config)) {
+            sendResponse({ ok: false, unsupported: true, error: '当前翻译服务无语言模型，阅读卡详解需在设置中配置 AI 服务商。' });
+            return;
+          }
+          const level = sanitizeExplainLevel(request.level);
+          const context = typeof request.context === 'string' ? request.context.slice(0, 800) : '';
+          const history = Array.isArray(request.history)
+            ? request.history
+                .filter((turn): turn is { role: 'user' | 'assistant'; content: string } =>
+                  Boolean(turn) && typeof turn === 'object'
+                  && ((turn as { role?: unknown }).role === 'user' || (turn as { role?: unknown }).role === 'assistant')
+                  && typeof (turn as { content?: unknown }).content === 'string')
+                .slice(-8)
+                .map((turn) => ({ role: turn.role, content: turn.content.slice(0, 1000) }))
+            : [];
+          const requestConfig = prepareExtensionProviderConfig(config);
+          const system = buildExplainSystemPrompt(config.targetLanguage)
+            + (request.followup === true ? FOLLOWUP_SYSTEM_SUFFIX : '');
+          logger.info('background.explain.start', { characters: query.length, level, followup: request.followup === true, turns: history.length });
+          const raw = await completeWithOpenAICompatible({
+            endpoint: requestConfig.endpoint,
+            apiKey: requestConfig.apiKey,
+            model: requestConfig.model,
+            system,
+            user: buildExplainUserPrompt(query, level, context),
+            history,
+            maxTokens: 1600,
+            timeoutMs: 45_000,
+          });
+          logger.info('background.explain.success', { outputCharacters: raw.length });
+          sendResponse({ ok: true, result: parseExplainResponse(raw) });
+          return;
+        }
+
+        const { text, precedingParagraphs } = message as { type: 'translate'; text: string; precedingParagraphs?: string[] };
         activeProviderId = config.providerId;
         if (typeof text !== 'string' || !text.trim()) throw new Error('翻译内容为空。');
         const safeText = text.slice(0, MAX_PARAGRAPH_CHARS);
+        const safePreceding = sanitizePrecedingParagraphs(precedingParagraphs);
         logger.info('background.translation.start', { inputCharacters: safeText.length, model: config.model });
 if (isMtBackend(config)) {
             const adapter = getMtAdapter(config.providerId);
-            const translations = await adapter.translateBatch([safeText], buildMtRequest(config));
+            const translations = applyGlossaryReplacements(
+              await adapter.translateBatch([safeText], buildMtRequest(config)),
+              config.glossary,
+            );
             const translation = translations[0] ?? '';
             logger.info('background.translation.success', { backend: config.providerId, outputCharacters: translation.length });
             sendResponse({ ok: true, translation });
             return;
           }
         const requestConfig = prepareExtensionProviderConfig(config);
-        const translation = await translateWithOpenAICompatible({ ...requestConfig, text: safeText });
+        const translation = await translateWithOpenAICompatible({ ...requestConfig, text: safeText, precedingParagraphs: safePreceding });
         logger.info('background.translation.success', { outputCharacters: translation.length });
         sendResponse({ ok: true, translation });
       } catch (error) {

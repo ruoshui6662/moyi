@@ -1,6 +1,11 @@
 import { CONFIG_STORAGE_KEY, getConfig, type TranslatorConfig } from '../../utils/config';
 import { describeKeyEvent } from '../../utils/shortcuts';
-import { flushPendingCacheWrites, restoreAllTranslations, stopTranslation, translatePage } from './trans';
+import { DEFAULT_MAX_BATCH_SIZE, flushPendingCacheWrites, restoreAllTranslations, stopTranslation, translatePage } from './trans';
+import { APPLY_SITE_RULES_EVENT } from './siteRuleBridge';
+import type { SiteRule } from '../../utils/siteRules';
+
+/** 个人规则的同步快照：广播事件用 detail 携带（type-only 导入零体积），避免异步读存储与首翻竞态。 */
+let cachedPersonalRules: SiteRule[] = [];
 import { applyTranslationStyles, toTranslationTheme } from './translationRenderer';
 import { applyFloatAppearance, mountFloatingButton, syncFloatingButtonState, type FloatingButtonOptions } from './floatingButton';
 
@@ -20,6 +25,7 @@ const refreshConfig = async (): Promise<void> => {
   const config = await getConfig();
   applyTranslationStyles(toTranslationTheme(config));
   applyShortcuts(config);
+  cachedPersonalRules = config.siteRules;
   // 悬浮按钮外观随配置热更新；按钮未挂载时内部静默跳过
   applyFloatAppearance({ size: config.floatSize, opacity: config.floatOpacity });
 };
@@ -60,7 +66,10 @@ export default defineContentScript({
     chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
       const type = (message as { type?: string } | null)?.type;
       if (type === 'translate-page') {
-        const maxBatchSize = ((message as { maxBatchSize?: number })?.maxBatchSize ?? 5) as number;
+        // 缺省批上限与 trans 的动态装箱合同一致（长文请求数 ÷16 的前提）
+        const maxBatchSize = ((message as { maxBatchSize?: number })?.maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE) as number;
+        // 广播（同步派发）：插件独有入口在监听器里注入本会话规则集；油猴端无监听器 → 空规则
+        window.dispatchEvent(new CustomEvent(APPLY_SITE_RULES_EVENT, { detail: { personalRules: cachedPersonalRules } }));
         void translatePage(maxBatchSize).then((result) => sendResponse({ ok: true, ...result })).catch((error) => {
           sendResponse({ ok: false, error: error instanceof Error ? error.message : '翻译失败。' });
         });

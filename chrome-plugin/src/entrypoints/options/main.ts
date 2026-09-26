@@ -15,7 +15,43 @@ import { formatShortcut, validateShortcut, waitForKeyCombo } from '../../utils/s
 import { clearTranslationCache } from '../content/translationCache';
 import type { TranslationStylePreset } from '../../utils/config';
 import type { TranslationPromptStyle } from '../../utils/prompts';
-import { sanitizePromptStyle } from '../../utils/prompts';
+import { PROMPT_STYLES, sanitizePromptStyle } from '../../utils/prompts';
+import { parseGlossaryText, sanitizeGlossary, type GlossaryEntry } from '../../utils/glossary';
+import { formatVocabDate, loadVocabBook, saveVocabBook, toVocabCsv, toVocabJson, type VocabEntry } from '../../utils/vocabbook';
+import {
+  afterDraftRemoved,
+  afterProviderSaved,
+  canDeleteProvider,
+  deleteConfirmCopy,
+  nextActiveProviderAfterDelete,
+  nextDraftNames,
+  resolveProviderName,
+  withoutProvider,
+  type DraftState,
+} from '../../utils/providerEditor';
+import { createTtsQueue, resolveTargetSpeechLang } from '../../utils/tts';
+import { PICKED_ELEMENT_KEY, type PickedElement } from '../../utils/pickedElement';
+import { applyRuleEdit, buildRuleFromForm, parseSelectorLines, sanitizeRuleSubscriptions, summarizeRule, type SiteRule } from '../../utils/siteRules';
+import { isRuleCacheFresh, loadRuleCache, saveRuleCache, RULE_CACHE_MAX_AGE_MS } from '../../utils/ruleRepository';
+import {
+  PROFILES_MAX,
+  applyProfile,
+  buildProfileSnapshot,
+  mergeSnapshot,
+  mergeSubscriptionResults,
+  nextProfilesOnSave,
+  parseConfigBackup,
+  pushConfigHistory,
+  sanitizeProfiles,
+  sanitizeWebDavSettings,
+  serializeConfigBackup,
+  webDavGet,
+  webDavProbe,
+  webDavPut,
+  type ConfigHistoryEntry,
+  type SceneProfile,
+  type WebDavSettings,
+} from '../../utils/configSync';
 import {
   createCustomProviderId,
   isDeeplProviderId,
@@ -109,16 +145,89 @@ const previewP = document.querySelector<HTMLParagraphElement>('#previewP')!;
 const previewQuote = document.querySelector<HTMLQuoteElement>('#previewQuote')!;
 const previewSamples: HTMLElement[] = [previewH2, previewP, previewQuote];
 const styleStatus = document.querySelector<HTMLDivElement>('#styleStatus')!;
+const floatSizeInput = document.querySelector<HTMLInputElement>('#floatSize')!;
+const floatSizeValue = document.querySelector<HTMLSpanElement>('#floatSizeValue')!;
+const floatOpacityInput = document.querySelector<HTMLInputElement>('#floatOpacity')!;
+const floatOpacityValue = document.querySelector<HTMLSpanElement>('#floatOpacityValue')!;
 const openShortcutsButton = document.querySelector<HTMLButtonElement>('#openShortcuts')!;
 const clearTranslateShortcutButton = document.querySelector<HTMLButtonElement>('#clearTranslateShortcut')!;
 const translateShortcutDisplay = document.querySelector<HTMLElement>('#translateShortcutDisplay')!;
 const clearRestoreShortcutButton = document.querySelector<HTMLButtonElement>('#clearRestoreShortcut')!;
 const restoreShortcutDisplay = document.querySelector<HTMLElement>('#restoreShortcutDisplay')!;
+const inputTranslateShortcutDisplay = document.querySelector<HTMLElement>('#inputTranslateShortcutDisplay')!;
+const clearInputTranslateShortcutButton = document.querySelector<HTMLButtonElement>('#clearInputTranslateShortcut')!;
+const lookupShortcutDisplay = document.querySelector<HTMLElement>('#lookupShortcutDisplay')!;
+const clearLookupShortcutButton = document.querySelector<HTMLButtonElement>('#clearLookupShortcut')!;
+
+/** 应用内快捷键的动作域（与 PageShortcuts 键名一一对应）。 */
+type ShortcutTarget = 'translate' | 'restore' | 'inputTranslate' | 'lookup';
 const promptStyleInputs = Array.from(document.querySelectorAll<HTMLInputElement>('input[name="prompt-style"]'));
 const useCustomPromptInput = document.querySelector<HTMLInputElement>('#useCustomPrompt')!;
 const customPromptInput = document.querySelector<HTMLTextAreaElement>('#customPrompt')!;
 const savePromptButton = document.querySelector<HTMLButtonElement>('#savePrompt')!;
 const promptStatus = document.querySelector<HTMLDivElement>('#promptStatus')!;
+const glossaryRows = document.querySelector<HTMLDivElement>('#glossaryRows')!;
+const glossaryAddButton = document.querySelector<HTMLButtonElement>('#glossaryAdd')!;
+const glossaryImportButton = document.querySelector<HTMLButtonElement>('#glossaryImport')!;
+const glossaryExportButton = document.querySelector<HTMLButtonElement>('#glossaryExport')!;
+const glossaryFileInput = document.querySelector<HTMLInputElement>('#glossaryFile')!;
+const glossaryStatus = document.querySelector<HTMLDivElement>('#glossaryStatus')!;
+const glossaryPasteButton = document.querySelector<HTMLButtonElement>('#glossaryPaste')!;
+const glossaryPasteBox = document.querySelector<HTMLDivElement>('#glossaryPasteBox')!;
+const glossaryPasteInput = document.querySelector<HTMLTextAreaElement>('#glossaryPasteInput')!;
+const glossaryPasteApplyButton = document.querySelector<HTMLButtonElement>('#glossaryPasteApply')!;
+const glossaryPasteCancelButton = document.querySelector<HTMLButtonElement>('#glossaryPasteCancel')!;
+const selectionLookupInput = document.querySelector<HTMLInputElement>('#selectionLookupEnabled')!;
+const selectionHoverInput = document.querySelector<HTMLInputElement>('#selectionHoverEnabled')!;
+const vocabSearch = document.querySelector<HTMLInputElement>('#vocabSearch')!;
+const vocabList = document.querySelector<HTMLDivElement>('#vocabList')!;
+const vocabEmpty = document.querySelector<HTMLDivElement>('#vocabEmpty')!;
+const vocabStatus = document.querySelector<HTMLDivElement>('#vocabStatus')!;
+const vocabAnkiExport = document.querySelector<HTMLButtonElement>('#vocabAnkiExport')!;
+const vocabAnkiStatus = document.querySelector<HTMLDivElement>('#vocabAnkiStatus')!;
+const vocabExportCsvButton = document.querySelector<HTMLButtonElement>('#vocabExportCsv')!;
+const vocabExportJsonButton = document.querySelector<HTMLButtonElement>('#vocabExportJson')!;
+const vocabClearButton = document.querySelector<HTMLButtonElement>('#vocabClear')!;
+// ── 备份与同步分区 ──
+const configExportButton = document.querySelector<HTMLButtonElement>('#configExport')!;
+const configImportButton = document.querySelector<HTMLButtonElement>('#configImport')!;
+const configFileInput = document.querySelector<HTMLInputElement>('#configFile')!;
+const configBackupStatus = document.querySelector<HTMLDivElement>('#configBackupStatus')!;
+const configHistoryList = document.querySelector<HTMLDivElement>('#configHistoryList')!;
+const configHistoryEmpty = document.querySelector<HTMLDivElement>('#configHistoryEmpty')!;
+const webdavUrlInput = document.querySelector<HTMLInputElement>('#webdavUrl')!;
+const webdavUsernameInput = document.querySelector<HTMLInputElement>('#webdavUsername')!;
+const webdavPasswordInput = document.querySelector<HTMLInputElement>('#webdavPassword')!;
+const webdavPathInput = document.querySelector<HTMLInputElement>('#webdavPath')!;
+const webdavTestButton = document.querySelector<HTMLButtonElement>('#webdavTest')!;
+const webdavUploadButton = document.querySelector<HTMLButtonElement>('#webdavUpload')!;
+const webdavDownloadButton = document.querySelector<HTMLButtonElement>('#webdavDownload')!;
+const webdavStatus = document.querySelector<HTMLDivElement>('#webdavStatus')!;
+const profileNameInput = document.querySelector<HTMLInputElement>('#profileName')!;
+const profileSaveButton = document.querySelector<HTMLButtonElement>('#profileSave')!;
+const profileList = document.querySelector<HTMLDivElement>('#profileList')!;
+const profileEmpty = document.querySelector<HTMLDivElement>('#profileEmpty')!;
+const profileStatus = document.querySelector<HTMLDivElement>('#profileStatus')!;
+// ── 站点规则分区 ──
+const ruleNameInput = document.querySelector<HTMLInputElement>('#ruleName')!;
+const ruleHostInput = document.querySelector<HTMLInputElement>('#ruleHost')!;
+const ruleIncludeInput = document.querySelector<HTMLTextAreaElement>('#ruleInclude')!;
+const ruleExcludeInput = document.querySelector<HTMLTextAreaElement>('#ruleExclude')!;
+const ruleForceInput = document.querySelector<HTMLInputElement>('#ruleForce')!;
+const ruleSaveButton = document.querySelector<HTMLButtonElement>('#ruleSave')!;
+const ruleEditCancelButton = document.querySelector<HTMLButtonElement>('#ruleEditCancel')!;
+const ruleStatus = document.querySelector<HTMLDivElement>('#ruleStatus')!;
+const rulePickElement = document.querySelector<HTMLButtonElement>('#rulePickElement')!;
+const rulePickHint = document.querySelector<HTMLDivElement>('#rulePickHint')!;
+const ruleList = document.querySelector<HTMLDivElement>('#ruleList')!;
+const ruleEmpty = document.querySelector<HTMLDivElement>('#ruleEmpty')!;
+const ruleSubUrlInput = document.querySelector<HTMLInputElement>('#ruleSubUrl')!;
+const ruleSubAddButton = document.querySelector<HTMLButtonElement>('#ruleSubAdd')!;
+const ruleSubList = document.querySelector<HTMLDivElement>('#ruleSubList')!;
+const ruleSubRefreshButton = document.querySelector<HTMLButtonElement>('#ruleSubRefresh')!;
+const ruleSubStatus = document.querySelector<HTMLDivElement>('#ruleSubStatus')!;
+const rulePreviewCopyButton = document.querySelector<HTMLButtonElement>('#rulePreviewCopy')!;
+const rulePreviewStatus = document.querySelector<HTMLDivElement>('#rulePreviewStatus')!;
 const resetAllButton = document.querySelector<HTMLButtonElement>('#resetAll')!;
 const openGuideButton = document.querySelector<HTMLButtonElement>('#openGuide')!;
 const toggleKeyVisibilityButton = document.querySelector<HTMLButtonElement>('#toggleKeyVisibility')!;
@@ -152,6 +261,8 @@ const subtitleFontSizeValue = document.querySelector<HTMLSpanElement>('#subtitle
 const subtitleShadowInput = document.querySelector<HTMLInputElement>('#subtitleShadow')!;
 const subtitleShadowValue = document.querySelector<HTMLSpanElement>('#subtitleShadowValue')!;
 const subtitleHideNativeInput = document.querySelector<HTMLInputElement>('#subtitleHideNative')!;
+const subtitleXEnabledInput = document.querySelector<HTMLInputElement>('#subtitleXEnabled')!;
+const subtitleAiSegmentationInput = document.querySelector<HTMLInputElement>('#subtitleAiSegmentation')!;
 const subtitlePreview = document.querySelector<HTMLDivElement>('#subtitlePreview')!;
 const subtitleStatus = document.querySelector<HTMLDivElement>('#subtitleStatus')!;
 const resetSubtitleButton = document.querySelector<HTMLButtonElement>('#resetSubtitle')!;
@@ -397,6 +508,46 @@ const syncLineHeight = (): void => {
 };
 
 /** 字距滑杆（em）：0 = 跟随原文；非 0 显示带符号的 em 值。 */
+
+/** 悬浮按钮滑杆：值域与 config 合同一致（FLOAT_SIZE 26–48 / FLOAT_OPACITY 0.4–1）。 */
+const syncFloatControls = (): void => {
+  const size = Math.min(48, Math.max(26, Math.round(Number(floatSizeInput.value) || 32)));
+  const opacity = Math.min(1, Math.max(0.4, Number(floatOpacityInput.value) || 0.9));
+  const sizeLabel = size + 'px';
+  const opacityLabel = Math.round(opacity * 100) + '%';
+  floatSizeValue.textContent = sizeLabel;
+  floatSizeInput.setAttribute('aria-valuetext', sizeLabel);
+  floatOpacityValue.textContent = opacityLabel;
+  floatOpacityInput.setAttribute('aria-valuetext', opacityLabel);
+  syncRangeFill(floatSizeInput);
+  syncRangeFill(floatOpacityInput);
+};
+
+let floatSaveTimer: number | undefined;
+/** 悬浮球外观防抖自动保存：拖动滑杆即时生效（内容脚本监听 storage.onChanged），落盘合并写。 */
+const saveFloatNow = async (): Promise<void> => {
+  try {
+    const config = await getConfig();
+    await saveConfig({
+      ...config,
+      floatSize: Math.min(48, Math.max(26, Math.round(Number(floatSizeInput.value) || 32))),
+      floatOpacity: Math.min(1, Math.max(0.4, Number(floatOpacityInput.value) || 0.9)),
+    });
+  } catch (error) {
+    logger.error('options.float_save.failure', { error });
+  }
+};
+const scheduleFloatSave = (): void => {
+  syncFloatControls();
+  if (floatSaveTimer !== undefined) window.clearTimeout(floatSaveTimer);
+  floatSaveTimer = window.setTimeout(() => {
+    floatSaveTimer = undefined;
+    void saveFloatNow();
+  }, 400);
+};
+floatSizeInput.addEventListener('input', scheduleFloatSave);
+floatOpacityInput.addEventListener('input', scheduleFloatSave);
+
 const syncLetterSpacing = (): void => {
   const value = sanitizeTranslationLetterSpacing(letterSpacingInput.value);
   const formatted = value === 0 ? '跟随原文' : `${value > 0 ? '+' : ''}${value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}em`;
@@ -471,6 +622,8 @@ interface SubtitleSnapshot {
   shadowIntensity: number;
   fontFamily: string;
   hideNativeCaptions: boolean;
+  xEnabled: SubtitleConfig['xEnabled'];
+  aiSegmentation: SubtitleConfig['aiSegmentation'];
 }
 
 /** 字幕译文字体：与主译文样式的「预设栈 / 自定义名称」同一套合同。 */
@@ -489,6 +642,8 @@ const readSubtitleFromControls = (): SubtitleSnapshot => ({
   shadowIntensity: sanitizeSubtitleShadow(subtitleShadowInput.value),
   fontFamily: readSubtitleFontFamilyFromControls(),
   hideNativeCaptions: subtitleHideNativeInput.checked,
+  xEnabled: subtitleXEnabledInput.checked,
+  aiSegmentation: subtitleAiSegmentationInput.checked,
 });
 
 const subtitleEquals = (a: SubtitleSnapshot, b: SubtitleSnapshot): boolean =>
@@ -499,7 +654,9 @@ const subtitleEquals = (a: SubtitleSnapshot, b: SubtitleSnapshot): boolean =>
   && a.fontSize === b.fontSize
   && a.shadowIntensity === b.shadowIntensity
   && a.fontFamily === b.fontFamily
-  && a.hideNativeCaptions === b.hideNativeCaptions;
+  && a.hideNativeCaptions === b.hideNativeCaptions
+  && a.xEnabled === b.xEnabled
+  && a.aiSegmentation === b.aiSegmentation;
 
 /** 预览区与视频覆盖层共用同一组 --moyi-sub-* 变量契约。 */
 const applySubtitlePreview = (): void => {
@@ -559,8 +716,6 @@ const syncSubtitleControls = (): void => {
 let lastSavedSubtitle: SubtitleSnapshot | null = null;
 let subtitleSaveTimer: number | undefined;
 /** 无设置页控件的字段：读取时记忆、保存时原样回写，避免误改。 */
-let subtitleXEnabled = DEFAULT_SUBTITLE_CONFIG.xEnabled;
-let subtitleAiSegmentation = DEFAULT_SUBTITLE_CONFIG.aiSegmentation;
 
 const refreshSubtitleDirtyHint = (): void => {
   if (!lastSavedSubtitle || subtitleStatus.classList.contains('error')) return;
@@ -574,11 +729,7 @@ const saveSubtitleNow = async (): Promise<void> => {
   window.clearTimeout(subtitleSaveTimer);
   try {
     const snapshot = readSubtitleFromControls();
-    const fullConfig: SubtitleConfig = {
-      ...snapshot,
-      xEnabled: subtitleXEnabled,
-      aiSegmentation: subtitleAiSegmentation,
-    };
+    const fullConfig: SubtitleConfig = { ...snapshot };
     await saveSubtitleConfig(fullConfig);
 
     const verified = await getSubtitleConfig();
@@ -660,8 +811,8 @@ const loadSubtitleSettings = async (): Promise<void> => {
     stored = { ...DEFAULT_SUBTITLE_CONFIG };
   }
   subtitleEnabledInput.checked = stored.enabled;
-  subtitleXEnabled = stored.xEnabled !== false;
-  subtitleAiSegmentation = stored.aiSegmentation !== false;
+  subtitleXEnabledInput.checked = stored.xEnabled !== false;
+  subtitleAiSegmentationInput.checked = stored.aiSegmentation !== false;
   const modeRadio = subtitleModeInputs.find((input) => input.value === stored.displayMode);
   if (modeRadio) modeRadio.checked = true;
   subtitleColorInput.value = stored.color;
@@ -708,6 +859,8 @@ const load = async (): Promise<void> => {
   sizeInput.value = String(config.translationFontSize);
   lineHeightInput.value = String(config.translationLineHeight);
   letterSpacingInput.value = String(config.translationLetterSpacing);
+  floatSizeInput.value = String(config.floatSize);
+  floatOpacityInput.value = String(config.floatOpacity);
   // 回填译文字体：匹配预设 option 则选中，自定义值进入输入框
   const fontFamily = sanitizeTranslationFontFamily(config.translationFontFamily);
   const presetOptions = Array.from(fontSelectInput.options).map((option) => option.value);
@@ -725,6 +878,7 @@ const load = async (): Promise<void> => {
   syncSizeLabel();
   syncLineHeight();
   syncLetterSpacing();
+  syncFloatControls();
   lastSavedTheme = readThemeFromControls();
   applyPreview();
 
@@ -734,6 +888,9 @@ const load = async (): Promise<void> => {
   customPromptInput.value = config.customPrompt;
   customPromptInput.disabled = !config.useCustomPrompt;
   syncPromptCharCount();
+  selectionLookupInput.checked = config.selectionLookupEnabled !== false;
+  selectionHoverInput.checked = config.selectionHoverEnabled === true;
+  renderGlossaryRows(config.glossary);
   syncShortcutRows(config);
 };
 
@@ -753,6 +910,8 @@ const effectiveApiSecret = (): string => apiSecret.value.trim() || activeSavedAp
 const draftProviderIds = new Set<string>();
 /** 草稿对应的名字（仅内存，未保存前不落盘）。 */
 const draftProviderNames = new Map<string, string>();
+/** 草稿态快照（纯逻辑层只读它做决策）。 */
+const draftState = (): DraftState => ({ ids: draftProviderIds, names: draftProviderNames });
 
 const buildProviderLogoElement = (id: string, meta: ProviderMeta, providers: Record<string, ProviderSettings>): HTMLElement => {
   const logo = document.createElement('span');
@@ -926,7 +1085,7 @@ const selectProvider = (id: string): void => {
     providerNameInput.value = currentConfig.providers[id]?.name ?? draftProviderNames.get(id) ?? '';
   }
   const hasSavedEntry = Boolean(currentConfig.providers[id]);
-  deleteProviderButton.hidden = !(isCustom && (hasSavedEntry || draftProviderIds.has(id)));
+  deleteProviderButton.hidden = !canDeleteProvider(id, currentConfig.providers, draftState());
   // 传统 MT（DeepL / 腾讯）：隐藏模型与推理开关
   modelField.hidden = isMt;
   disableReasoningRow.hidden = isMt;
@@ -1021,8 +1180,11 @@ const saveProviderNow = async (): Promise<void> => {
       return;
     }
     currentConfig = verified;
-    draftProviderIds.delete(selectedProviderId);
-    draftProviderNames.delete(selectedProviderId);
+    const cleared = afterProviderSaved(draftState(), selectedProviderId);
+    draftProviderIds.clear();
+    for (const key of cleared.ids) draftProviderIds.add(key);
+    draftProviderNames.clear();
+    for (const [key, value] of cleared.names) draftProviderNames.set(key, value);
     selectProvider(selectedProviderId);
     logger.info('options.provider_save.success', { providerId: selectedProviderId });
     showToast('已保存');
@@ -1066,10 +1228,9 @@ addCustomProviderButton.addEventListener('click', () => {
 providerNameInput.addEventListener('input', () => {
   if (!currentConfig || !isCustomProviderId(selectedProviderId)) return;
   const name = providerNameInput.value.trim();
-  if (!currentConfig.providers[selectedProviderId]) {
-    if (name) draftProviderNames.set(selectedProviderId, name);
-    else draftProviderNames.delete(selectedProviderId);
-  }
+  const nextNames = nextDraftNames(draftProviderNames, selectedProviderId, name, currentConfig.providers);
+  draftProviderNames.clear();
+  for (const [key, value] of nextNames) draftProviderNames.set(key, value);
   providerName.textContent = name || '自定义服务商';
   renderProviderRail();
 });
@@ -1078,22 +1239,20 @@ deleteProviderButton.addEventListener('click', () => {
   void (async () => {
     const id = selectedProviderId;
     if (!currentConfig || !isCustomProviderId(id)) return;
-    const isDraft = !currentConfig.providers[id];
-    if (!isDraft && !draftProviderIds.has(id)) return;
-    const name = getProviderDisplayName(currentConfig.providers, id);
-    const confirmed = await confirmDanger({
-      title: isDraft ? '放弃未保存的服务商？' : `删除「${name}」？`,
-      body: isDraft
-        ? [`「${name}」尚未保存，放弃后已填写的内容将被丢弃。`]
-        : [`「${name}」的 API Key 与服务配置将被清除。`, '此操作无法撤销。'],
-      confirmLabel: isDraft ? '放弃' : '删除服务商',
-    });
+    // 决策全部委托纯逻辑层（v0.1.21 的反向守卫教训：判断不可藏在 UI 事件里）
+    const copy = deleteConfirmCopy(id, currentConfig.providers, draftState());
+    const isDraft = copy.confirmLabel === '放弃';
+    const name = resolveProviderName(id, currentConfig.providers, draftState());
+    const confirmed = await confirmDanger({ ...copy });
     if (!confirmed) return;
 
     // 草稿：直接从内存移除并回到内置服务商
     if (isDraft) {
-      draftProviderIds.delete(id);
-      draftProviderNames.delete(id);
+      const cleared = afterDraftRemoved(draftState(), id);
+      draftProviderIds.clear();
+      for (const key of cleared.ids) draftProviderIds.add(key);
+      draftProviderNames.clear();
+      for (const [key, value] of cleared.names) draftProviderNames.set(key, value);
       selectedProviderId = 'openai';
       renderProviderRail();
       selectProvider('openai');
@@ -1103,9 +1262,8 @@ deleteProviderButton.addEventListener('click', () => {
     }
 
     const base = currentConfig;
-    const providers = { ...base.providers };
-    delete providers[id];
-    const nextProviderId = base.providerId === id ? 'openai' : base.providerId;
+    const providers = withoutProvider(base.providers, id);
+    const nextProviderId = nextActiveProviderAfterDelete(providers, id, base.providerId);
     const nextRuntime = resolveProviderSettings({ providers }, nextProviderId);
     try {
       await saveConfig({
@@ -1118,6 +1276,8 @@ deleteProviderButton.addEventListener('click', () => {
       });
       const verified = await getConfig();
       currentConfig = verified;
+      // 侧栏需要重绘：selectProvider 只切面板，不重建服务商列表（漏掉会让已删项留在列表里）
+      renderProviderRail();
       selectProvider(verified.providerId);
       logger.info('options.provider_delete.success', { providerId: id });
       showToast(`已删除「${name}」`);
@@ -1269,12 +1429,20 @@ const syncShortcutRows = (config: Awaited<ReturnType<typeof getConfig>>): void =
   restoreShortcutDisplay.textContent = config.shortcuts.restore
     ? formatShortcut(config.shortcuts.restore, isMacPlatform)
     : '设置';
+  inputTranslateShortcutDisplay.textContent = config.shortcuts.inputTranslate
+    ? formatShortcut(config.shortcuts.inputTranslate, isMacPlatform)
+    : '设置';
   clearTranslateShortcutButton.hidden = !config.shortcuts.translate;
   clearRestoreShortcutButton.hidden = !config.shortcuts.restore;
+  lookupShortcutDisplay.textContent = config.shortcuts.lookup
+    ? formatShortcut(config.shortcuts.lookup, isMacPlatform)
+    : '设置';
+  clearInputTranslateShortcutButton.hidden = !config.shortcuts.inputTranslate;
+  clearLookupShortcutButton.hidden = !config.shortcuts.lookup;
 };
 
 const beginShortcutRecording = async (
-  target: 'translate' | 'restore',
+  target: ShortcutTarget,
   displayEl: HTMLElement,
 ): Promise<void> => {
   const label = target === 'translate' ? '翻译' : '还原';
@@ -1314,14 +1482,14 @@ const beginShortcutRecording = async (
   }
 };
 
-const clearShortcut = async (target: 'translate' | 'restore'): Promise<void> => {
+const clearShortcut = async (target: ShortcutTarget): Promise<void> => {
   const config = await getConfig();
   await saveConfig({ ...config, shortcuts: { ...config.shortcuts, [target]: '' } });
   syncShortcutRows({ ...config, shortcuts: { ...config.shortcuts, [target]: '' } });
   showToast(target === 'translate' ? '已清除翻译快捷键' : '已清除还原快捷键');
 };
 
-const attachShortcutRecording = (target: 'translate' | 'restore', displayEl: HTMLElement): void => {
+const attachShortcutRecording = (target: ShortcutTarget, displayEl: HTMLElement): void => {
   displayEl.addEventListener('click', () => {
     void beginShortcutRecording(target, displayEl);
   });
@@ -1334,11 +1502,19 @@ const attachShortcutRecording = (target: 'translate' | 'restore', displayEl: HTM
 
 attachShortcutRecording('translate', translateShortcutDisplay);
 attachShortcutRecording('restore', restoreShortcutDisplay);
+attachShortcutRecording('inputTranslate', inputTranslateShortcutDisplay);
+attachShortcutRecording('lookup', lookupShortcutDisplay);
 clearTranslateShortcutButton.addEventListener('click', () => {
   void clearShortcut('translate');
 });
 clearRestoreShortcutButton.addEventListener('click', () => {
   void clearShortcut('restore');
+});
+clearInputTranslateShortcutButton.addEventListener('click', () => {
+  void clearShortcut('inputTranslate');
+});
+clearLookupShortcutButton.addEventListener('click', () => {
+  void clearShortcut('lookup');
 });
 
 // ── 提示词：显式保存 + 回读校验 ──
@@ -1388,6 +1564,904 @@ customPromptInput.addEventListener('blur', () => {
 });
 savePromptButton.addEventListener('click', () => void savePromptNow());
 
+// ── 划词查词开关：显式保存 + 回读校验（与提示词同模式） ──
+selectionHoverInput.addEventListener('change', () => {
+  void (async () => {
+    try {
+      const config = await getConfig();
+      await saveConfig({ ...config, selectionHoverEnabled: selectionHoverInput.checked });
+      const verified = await getConfig();
+      selectionHoverInput.checked = verified.selectionHoverEnabled === true;
+      logger.info('options.selection_hover.toggle', { enabled: selectionHoverInput.checked });
+    } catch (error) {
+      logger.error('options.selection_hover.failure', { error });
+      showToast('保存失败', 'error');
+    }
+  })();
+});
+
+selectionLookupInput.addEventListener('change', () => {
+  void (async () => {
+    try {
+      const config = await getConfig();
+      await saveConfig({ ...config, selectionLookupEnabled: selectionLookupInput.checked });
+      const verified = await getConfig();
+      selectionLookupInput.checked = verified.selectionLookupEnabled !== false;
+      logger.info('options.selection_lookup.toggle', { enabled: verified.selectionLookupEnabled !== false });
+    } catch (error) {
+      logger.error('options.selection_lookup.failure', { error });
+      showToast('保存失败', 'error');
+    }
+  })();
+});
+
+// ── 术语表：行编辑 + 防抖自动保存 + JSON 导入导出 ──
+let glossarySaveTimer: number | undefined;
+
+const scheduleGlossarySave = (): void => {
+  if (glossarySaveTimer !== undefined) window.clearTimeout(glossarySaveTimer);
+  glossarySaveTimer = window.setTimeout(() => {
+    glossarySaveTimer = undefined;
+    void saveGlossaryNow();
+  }, 600);
+};
+
+const buildGlossaryRow = (entry: GlossaryEntry): HTMLElement => {
+  const row = document.createElement('div');
+  row.className = 'glossary-row';
+  const termInput = document.createElement('input');
+  termInput.type = 'text';
+  termInput.className = 'glossary-term';
+  termInput.placeholder = '原词';
+  termInput.maxLength = 80;
+  termInput.value = entry.term;
+  const arrow = document.createElement('span');
+  arrow.className = 'glossary-arrow';
+  arrow.textContent = '→';
+  const translationInput = document.createElement('input');
+  translationInput.type = 'text';
+  translationInput.className = 'glossary-translation';
+  translationInput.placeholder = '固定译名';
+  translationInput.maxLength = 80;
+  translationInput.value = entry.translation;
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.className = 'btn-ghost-sm glossary-remove';
+  removeButton.title = '删除该术语';
+  removeButton.textContent = '✕';
+  removeButton.addEventListener('click', () => {
+    row.remove();
+    scheduleGlossarySave();
+  });
+  termInput.addEventListener('input', scheduleGlossarySave);
+  translationInput.addEventListener('input', scheduleGlossarySave);
+  row.append(termInput, arrow, translationInput, removeButton);
+  return row;
+};
+
+const collectGlossary = (): GlossaryEntry[] =>
+  sanitizeGlossary(
+    Array.from(glossaryRows.querySelectorAll<HTMLDivElement>('.glossary-row')).map((row) => ({
+      term: row.querySelector<HTMLInputElement>('.glossary-term')!.value,
+      translation: row.querySelector<HTMLInputElement>('.glossary-translation')!.value,
+    })),
+  );
+
+const saveGlossaryNow = async (): Promise<void> => {
+  try {
+    const glossary = collectGlossary();
+    const config = await getConfig();
+    await saveConfig({ ...config, glossary });
+    const verified = await getConfig();
+    if (
+      verified.glossary.length !== glossary.length
+      || verified.glossary.some((entry, i) => entry.term !== glossary[i]?.term || entry.translation !== glossary[i]?.translation)
+    ) {
+      setStatus(glossaryStatus, '保存未生效，请重试。', 'error');
+      return;
+    }
+    setStatus(glossaryStatus, glossary.length > 0 ? `已保存 ${glossary.length} 条术语。` : '术语表为空。', 'ok');
+  } catch (error) {
+    logger.error('options.glossary_save.failure', { error });
+    setStatus(glossaryStatus, error instanceof Error ? error.message : '术语表保存失败。', 'error');
+  }
+};
+
+const renderGlossaryRows = (entries: readonly GlossaryEntry[]): void => {
+  glossaryRows.textContent = '';
+  for (const entry of entries) glossaryRows.append(buildGlossaryRow(entry));
+};
+
+glossaryAddButton.addEventListener('click', () => {
+  const row = buildGlossaryRow({ term: '', translation: '' });
+  glossaryRows.append(row);
+  row.querySelector<HTMLInputElement>('.glossary-term')?.focus();
+});
+glossaryExportButton.addEventListener('click', () => {
+  const entries = collectGlossary();
+  const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = 'moyi-glossary.json';
+  anchor.click();
+  URL.revokeObjectURL(url);
+  setStatus(glossaryStatus, `已导出 ${entries.length} 条术语。`, 'ok');
+});
+glossaryImportButton.addEventListener('click', () => glossaryFileInput.click());
+glossaryFileInput.addEventListener('change', () => {
+  const file = glossaryFileInput.files?.[0];
+  glossaryFileInput.value = '';
+  if (!file) return;
+  void (async () => {
+    try {
+      const entries = sanitizeGlossary(JSON.parse(await file.text()));
+      if (entries.length === 0) {
+        setStatus(glossaryStatus, '文件中没有可识别的术语（需为 [{ term, translation }] 数组）。', 'error');
+        return;
+      }
+      renderGlossaryRows(entries);
+      await saveGlossaryNow();
+      showToast(`已导入 ${entries.length} 条术语`);
+    } catch {
+      logger.error('options.glossary_import.failure', {});
+      setStatus(glossaryStatus, '导入失败：不是有效的 JSON 词表。', 'error');
+    }
+  })();
+});
+
+const closeGlossaryPaste = (): void => {
+  glossaryPasteBox.hidden = true;
+  glossaryPasteInput.value = '';
+};
+
+glossaryPasteButton.addEventListener('click', () => {
+  glossaryPasteBox.hidden = !glossaryPasteBox.hidden;
+  if (!glossaryPasteBox.hidden) glossaryPasteInput.focus();
+});
+glossaryPasteCancelButton.addEventListener('click', closeGlossaryPaste);
+glossaryPasteApplyButton.addEventListener('click', () => {
+  const parsed = parseGlossaryText(glossaryPasteInput.value);
+  if (parsed.length === 0) {
+    setStatus(glossaryStatus, '没有解析出可用条目：每行需要「原词 + 分隔符 + 译名」（→ , | 制表符均可），或直接粘贴 JSON。', 'error');
+    return;
+  }
+  // 追加语义：既有项在前，sanitize 按原词去重时保留先出现者 → 冲突以已有译名为准
+  const before = collectGlossary();
+  const merged = sanitizeGlossary([...before, ...parsed]);
+  renderGlossaryRows(merged);
+  closeGlossaryPaste();
+  void saveGlossaryNow();
+  const added = merged.length - before.length;
+  const duplicated = parsed.length - Math.max(added, 0);
+  showToast(`已导入 ${added} 条${duplicated > 0 ? `，${duplicated} 条重名已跳过` : ''}`);
+});
+
+// ── 生词本：列表 / 搜索 / 删除 / 清空 / 导出 ──
+let vocabEntries: VocabEntry[] = [];
+
+const downloadVocabFile = (content: string, filename: string, type: string): void => {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
+
+const renderVocabList = (): void => {
+  const needle = vocabSearch.value.trim().toLowerCase();
+  const filtered = needle
+    ? vocabEntries.filter((entry) => `${entry.word}\n${entry.translation}\n${entry.context}\n${entry.pageTitle}`.toLowerCase().includes(needle))
+    : vocabEntries;
+  vocabList.textContent = '';
+  vocabEmpty.hidden = filtered.length > 0;
+  // 新收藏在上看：复习动线从最近开始
+  const ordered = [...filtered].sort((a, b) => b.createdAt - a.createdAt);
+  for (const entry of ordered) {
+    const row = document.createElement('div');
+    row.className = 'vocab-row';
+    const main = document.createElement('div');
+    main.className = 'vocab-main';
+    const word = document.createElement('div');
+    word.className = 'vocab-word';
+    word.textContent = entry.word;
+    main.append(word);
+    if (entry.translation) {
+      const translation = document.createElement('div');
+      translation.className = 'vocab-translation';
+      translation.textContent = entry.translation;
+      main.append(translation);
+    }
+    if (entry.context) {
+      const context = document.createElement('div');
+      context.className = 'vocab-context';
+      context.textContent = entry.context;
+      main.append(context);
+    }
+    const source = document.createElement('div');
+    source.className = 'vocab-source';
+    source.textContent = [entry.pageTitle, formatVocabDate(entry.createdAt)].filter(Boolean).join(' · ');
+    source.title = entry.url;
+    main.append(source);
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'btn-ghost-sm';
+    removeButton.title = '删除该生词';
+    removeButton.textContent = '✕';
+    removeButton.addEventListener('click', () => {
+      void (async () => {
+        try {
+          await saveVocabBook(vocabEntries.filter((item) => item !== entry));
+          vocabEntries = await loadVocabBook();
+          renderVocabList();
+          setStatus(vocabStatus, `已删除「${entry.word}」。`, 'ok');
+        } catch (error) {
+          logger.error('options.vocab_delete.failure', { error });
+          setStatus(vocabStatus, '删除失败，请重试。', 'error');
+        }
+      })();
+    });
+    row.append(main, removeButton);
+    vocabList.append(row);
+  }
+};
+
+const refreshVocabBook = async (): Promise<void> => {
+  try {
+    vocabEntries = await loadVocabBook();
+    renderVocabList();
+  } catch (error) {
+    logger.error('options.vocab_load.failure', { error });
+  }
+};
+
+vocabSearch.addEventListener('input', renderVocabList);
+vocabExportCsvButton.addEventListener('click', () => {
+  downloadVocabFile(toVocabCsv(vocabEntries), 'moyi-vocabbook.csv', 'text/csv;charset=utf-8');
+  setStatus(vocabStatus, `已导出 ${vocabEntries.length} 条生词（CSV，Excel/WPS 可直接打开）。`, 'ok');
+});
+vocabExportJsonButton.addEventListener('click', () => {
+  downloadVocabFile(toVocabJson(vocabEntries), 'moyi-vocabbook.json', 'application/json');
+  setStatus(vocabStatus, `已导出 ${vocabEntries.length} 条生词（JSON）。`, 'ok');
+});
+vocabClearButton.addEventListener('click', () => {
+  void (async () => {
+    if (vocabEntries.length === 0) return;
+    if (!(await confirmDanger({ title: '清空生词本？', body: [`将删除全部 ${vocabEntries.length} 条生词。`, '此操作无法撤销。'], confirmLabel: '清空' }))) return;
+    try {
+      await saveVocabBook([]);
+      vocabEntries = [];
+      renderVocabList();
+      setStatus(vocabStatus, '生词本已清空。', 'ok');
+    } catch (error) {
+      logger.error('options.vocab_clear.failure', { error });
+      setStatus(vocabStatus, '清空失败，请重试。', 'error');
+    }
+  })();
+});
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes['moyi-vocabbook']) void refreshVocabBook();
+});
+void refreshVocabBook();
+
+// ── 备份与同步：备份/历史/WebDAV/场景 Profile ──
+const saveConfigAndReload = async (mutate: (config: Awaited<ReturnType<typeof getConfig>>) => Awaited<ReturnType<typeof getConfig>>): Promise<void> => {
+  const config = await getConfig();
+  await saveConfig(mutate(config));
+  // 跨分区联动（服务商面板、预览、控件回读）统一走整页刷新——与「恢复出厂」同一收口策略
+  window.location.reload();
+};
+
+const importBackupText = (text: string): void => {
+  void (async () => {
+    try {
+      const parsed = parseConfigBackup(text);
+      if (parsed.error || !parsed.snapshot) {
+        setStatus(configBackupStatus, parsed.error ?? '备份内容为空。', 'error');
+        return;
+      }
+      await saveConfigAndReload((config) => ({
+        ...mergeSnapshot(config, parsed.snapshot as Partial<Awaited<ReturnType<typeof getConfig>>>) as Awaited<ReturnType<typeof getConfig>>,
+        configHistory: pushConfigHistory(config.configHistory, config, '导入备份前'),
+      }));
+    } catch (error) {
+      logger.error('options.config_import.failure', { error });
+      setStatus(configBackupStatus, '导入失败：保存配置时出错。', 'error');
+    }
+  })();
+};
+
+configExportButton.addEventListener('click', () => {
+  void (async () => {
+    const config = await getConfig();
+    const blob = new Blob([serializeConfigBackup(config)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'moyi-config.json';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setStatus(configBackupStatus, '备份已导出（不含 API Key）。', 'ok');
+  })();
+});
+configImportButton.addEventListener('click', () => configFileInput.click());
+configFileInput.addEventListener('change', () => {
+  const file = configFileInput.files?.[0];
+  configFileInput.value = '';
+  if (!file) return;
+  void file.text().then(importBackupText);
+});
+
+const renderConfigHistory = (history: readonly ConfigHistoryEntry[]): void => {
+  configHistoryList.textContent = '';
+  configHistoryEmpty.hidden = history.length > 0;
+  for (const entry of history) {
+    const row = document.createElement('div');
+    row.className = 'profile-row';
+    const main = document.createElement('div');
+    main.className = 'profile-main';
+    const label = document.createElement('div');
+    label.className = 'profile-name';
+    label.textContent = entry.label;
+    const time = document.createElement('div');
+    time.className = 'profile-sub';
+    time.textContent = new Date(entry.at).toLocaleString();
+    main.append(label, time);
+    const restore = document.createElement('button');
+    restore.className = 'btn-small';
+    restore.type = 'button';
+    restore.textContent = '恢复';
+    restore.addEventListener('click', () => {
+      void saveConfigAndReload((config) => ({
+        ...mergeSnapshot(config, entry.snapshot) as Awaited<ReturnType<typeof getConfig>>,
+        configHistory: pushConfigHistory(config.configHistory, config, '恢复历史前'),
+      }));
+    });
+    row.append(main, restore);
+    configHistoryList.append(row);
+  }
+};
+
+const collectWebDav = (): WebDavSettings => sanitizeWebDavSettings({
+  url: webdavUrlInput.value,
+  username: webdavUsernameInput.value,
+  password: webdavPasswordInput.value,
+  path: webdavPathInput.value,
+});
+
+/** 先把 WebDAV 表单落盘再执行动作：跨会话可用，也保证失败后配置不丢。 */
+const withWebDav = (label: string, action: (settings: WebDavSettings) => Promise<string>): void => {
+  void (async () => {
+    try {
+      const config = await getConfig();
+      const settings = collectWebDav();
+      await saveConfig({ ...config, webdav: settings });
+      const message = await action(settings);
+      setStatus(webdavStatus, `${label}：${message}`, 'ok');
+    } catch (error) {
+      logger.error('options.webdav.failure', { error, label });
+      setStatus(webdavStatus, `${label}失败：${error instanceof Error ? error.message : '未知错误'}`, 'error');
+    }
+  })();
+};
+
+webdavTestButton.addEventListener('click', () => {
+  withWebDav('测试连接', async (settings) => {
+    if (!settings.url || !settings.username) throw new Error('请先填写目录地址与账号。');
+    const probe = await webDavProbe(settings);
+    return probe.hasBackup ? '连接成功，远端已有备份。' : '连接成功，远端暂无备份。';
+  });
+});
+webdavUploadButton.addEventListener('click', () => {
+  withWebDav('上传', async (settings) => {
+    if (!settings.url || !settings.username) throw new Error('请先填写目录地址与账号。');
+    const config = await getConfig();
+    await webDavPut(settings, serializeConfigBackup(config));
+    return '备份已上传（不含 API Key）。';
+  });
+});
+webdavDownloadButton.addEventListener('click', () => {
+  withWebDav('下载', async (settings) => {
+    const text = await webDavGet(settings);
+    if (text === null) throw new Error('远端没有备份文件。');
+    const parsed = parseConfigBackup(text);
+    if (parsed.error || !parsed.snapshot) throw new Error(parsed.error ?? '远端备份内容不可用。');
+    await saveConfigAndReload((config) => ({
+      ...mergeSnapshot(config, parsed.snapshot as Partial<Awaited<ReturnType<typeof getConfig>>>) as Awaited<ReturnType<typeof getConfig>>,
+      configHistory: pushConfigHistory(config.configHistory, config, 'WebDAV 下载前'),
+    }));
+    return '已应用远端配置。';
+  });
+});
+
+const renderProfiles = (profiles: readonly SceneProfile[]): void => {
+  profileList.textContent = '';
+  profileEmpty.hidden = profiles.length > 0;
+  for (const profile of profiles) {
+    const row = document.createElement('div');
+    row.className = 'profile-row';
+    const main = document.createElement('div');
+    main.className = 'profile-main';
+    const name = document.createElement('div');
+    name.className = 'profile-name';
+    name.textContent = profile.name;
+    const sub = document.createElement('div');
+    sub.className = 'profile-sub';
+    const styleLabel = PROMPT_STYLES.find((style) => style.id === profile.snapshot.promptStyle)?.label ?? '通用';
+    sub.textContent = `${getProviderDisplayName(undefined, profile.snapshot.providerId)} · ${styleLabel} · ${profile.snapshot.translationStyle}`;
+    main.append(name, sub);
+    const actions = document.createElement('span');
+    actions.className = 'profile-actions';
+    const applyButton = document.createElement('button');
+    applyButton.className = 'btn-small';
+    applyButton.type = 'button';
+    applyButton.textContent = '应用';
+    applyButton.addEventListener('click', () => {
+      void saveConfigAndReload((config) => ({
+        ...applyProfile(config, profile),
+        configHistory: pushConfigHistory(config.configHistory, config, '切换场景前'),
+      }));
+    });
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'btn-small';
+    deleteButton.type = 'button';
+    deleteButton.textContent = '删除';
+    deleteButton.addEventListener('click', () => {
+      void (async () => {
+        const config = await getConfig();
+        await saveConfig({ ...config, profiles: config.profiles.filter((item) => item.id !== profile.id) });
+        renderProfiles((await getConfig()).profiles);
+        setStatus(profileStatus, `已删除场景「${profile.name}」。`, 'ok');
+      })();
+    });
+    actions.append(applyButton, deleteButton);
+    row.append(main, actions);
+    profileList.append(row);
+  }
+};
+
+profileSaveButton.addEventListener('click', () => {
+  void (async () => {
+    const name = profileNameInput.value.trim();
+    if (!name) {
+      setStatus(profileStatus, '请先给场景起个名字。', 'error');
+      return;
+    }
+    try {
+      const config = await getConfig();
+      if (config.profiles.length >= PROFILES_MAX) {
+        setStatus(profileStatus, `场景数量已达上限（${PROFILES_MAX}），先删一个再保存。`, 'error');
+        return;
+      }
+      const profile: SceneProfile = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `p-${Date.now()}`,
+        name,
+        snapshot: buildProfileSnapshot(config),
+      };
+      const profiles = sanitizeProfiles([...config.profiles, profile]);
+      await saveConfig({ ...config, profiles });
+      profileNameInput.value = '';
+      renderProfiles(profiles);
+      setStatus(profileStatus, `已保存场景「${name}」。`, 'ok');
+    } catch (error) {
+      logger.error('options.profile_save.failure', { error });
+      setStatus(profileStatus, '保存场景失败。', 'error');
+    }
+  })();
+});
+
+void (async () => {
+  const config = await getConfig();
+  webdavUrlInput.value = config.webdav.url;
+  webdavUsernameInput.value = config.webdav.username;
+  webdavPasswordInput.value = config.webdav.password;
+  webdavPathInput.value = config.webdav.path;
+  renderConfigHistory(config.configHistory);
+  renderProfiles(config.profiles);
+})();
+
+// ── 朗读（TTS v1）：语速/音色 + 试听 ──
+const ttsRateInput = document.querySelector<HTMLInputElement>('#ttsRate')!;
+const ttsRateValue = document.querySelector<HTMLSpanElement>('#ttsRateValue')!;
+const ttsVoiceSelect = document.querySelector<HTMLSelectElement>('#ttsVoice')!;
+const ttsVoiceHint = document.querySelector<HTMLDivElement>('#ttsVoiceHint')!;
+const ttsReloadVoicesButton = document.querySelector<HTMLButtonElement>('#ttsReloadVoices')!;
+const ttsPreviewButton = document.querySelector<HTMLButtonElement>('#ttsPreview')!;
+const ttsStatus = document.querySelector<HTMLDivElement>('#ttsStatus')!;
+const ttsEdgeEnabled = document.querySelector<HTMLInputElement>('#ttsEdgeEnabled')!;
+const ttsEdgePanel = document.querySelector<HTMLDivElement>('#ttsEdgePanel')!;
+const ttsEdgeVoiceSelect = document.querySelector<HTMLSelectElement>('#ttsEdgeVoice')!;
+const ttsEdgeHint = document.querySelector<HTMLDivElement>('#ttsEdgeHint')!;
+
+const syncTtsRate = (): void => {
+  const rate = Math.min(2, Math.max(0.5, Number(ttsRateInput.value) || 1));
+  const label = rate.toFixed(1) + '×';
+  ttsRateValue.textContent = label;
+  ttsRateInput.setAttribute('aria-valuetext', label);
+  syncRangeFill(ttsRateInput);
+};
+
+const saveTtsNow = async (): Promise<void> => {
+  try {
+    const config = await getConfig();
+    await saveConfig({
+      ...config,
+      ttsRate: Math.min(2, Math.max(0.5, Number(ttsRateInput.value) || 1)),
+      ttsVoiceURI: ttsVoiceSelect.value,
+    });
+  } catch (error) {
+    logger.error('options.tts_save.failure', { error });
+  }
+};
+
+/** 音色列表：Chrome 异步填充 voices，options 加载时可能为空；onchange/focus 重拉。 */
+const refreshTtsVoices = (): void => {
+  const voices = typeof speechSynthesis !== 'undefined' ? speechSynthesis.getVoices() : [];
+  const previous = ttsVoiceSelect.value;
+  ttsVoiceSelect.textContent = '';
+  const autoOption = document.createElement('option');
+  autoOption.value = '';
+  autoOption.textContent = '自动（按语言挑选系统音色）';
+  ttsVoiceSelect.append(autoOption);
+  for (const voice of voices) {
+    const option = document.createElement('option');
+    option.value = voice.voiceURI;
+    option.textContent = `${voice.name}（${voice.lang}）`;
+    ttsVoiceSelect.append(option);
+  }
+  ttsVoiceSelect.value = voices.some((voice) => voice.voiceURI === previous) ? previous : '';
+  if (voices.length === 0) {
+    ttsVoiceHint.textContent = '暂未读到系统音色：请确认系统安装了语音包，然后点「重新加载音色」。';
+  } else {
+    ttsVoiceHint.textContent = `检测到 ${voices.length} 个系统音色。`;
+  }
+};
+
+ttsRateInput.addEventListener('input', () => {
+  syncTtsRate();
+  void saveTtsNow();
+});
+ttsVoiceSelect.addEventListener('change', () => {
+  void saveTtsNow();
+  setStatus(ttsStatus, '音色已保存。', 'ok');
+});
+ttsReloadVoicesButton.addEventListener('click', () => {
+  refreshTtsVoices();
+  setStatus(ttsStatus, '音色列表已重新加载。', 'ok');
+});
+ttsPreviewButton.addEventListener('click', () => {
+  void (async () => {
+    if (typeof speechSynthesis === 'undefined') {
+      setStatus(ttsStatus, '当前环境不支持语音合成。', 'error');
+      return;
+    }
+    const config = await getConfig();
+    const sample = '这是墨译的朗读示例，The reading voice follows your system settings.';
+    const targetLang = resolveTargetSpeechLang(config.targetLanguage) ?? undefined;
+    createTtsQueue().speak(sample, { ...(targetLang ? { lang: targetLang } : {}), voiceURI: ttsVoiceSelect.value, rate: Number(ttsRateInput.value) || 1 });
+    setStatus(ttsStatus, '正在试听…', 'ok');
+  })();
+});
+// ── Edge 云端语音（可选音源）：开关 + 音色列表（后台拉取）──
+let ttsEdgeVoices: { ShortName: string; Gender?: string; Locale?: string }[] = [];
+
+const applyTtsEdgePanel = (): void => {
+  ttsEdgePanel.hidden = !ttsEdgeEnabled.checked;
+};
+
+const loadTtsEdgeVoices = async (): Promise<void> => {
+  ttsEdgeHint.textContent = '正在拉取云端音色…';
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'edge-tts-voices' }) as
+      { ok: boolean; voices?: { ShortName: string; Gender?: string; Locale?: string }[]; error?: string };
+    if (!response?.ok) throw new Error(response?.error || '音色列表拉取失败。');
+    ttsEdgeVoices = response.voices ?? [];
+    const config = await getConfig();
+    ttsEdgeVoiceSelect.textContent = '';
+    for (const voice of ttsEdgeVoices) {
+      const option = document.createElement('option');
+      option.value = voice.ShortName;
+      option.textContent = voice.ShortName + (voice.Gender ? ' · ' + (voice.Gender === 'Female' ? '女声' : '男声') : '');
+      ttsEdgeVoiceSelect.append(option);
+    }
+    ttsEdgeVoiceSelect.value = ttsEdgeVoices.some((v) => v.ShortName === config.ttsEdgeVoice)
+      ? config.ttsEdgeVoice
+      : (ttsEdgeVoices.find((v) => v.ShortName.startsWith('zh-CN'))?.ShortName ?? ttsEdgeVoices[0]?.ShortName ?? '');
+    ttsEdgeHint.textContent = ttsEdgeVoices.length > 0
+      ? `已加载 ${ttsEdgeVoices.length} 个云端音色`
+      : '音色列表为空：可能是协议变化或网络受限——可继续使用系统语音。';
+  } catch (error) {
+    ttsEdgeHint.textContent = '音色拉取失败：' + (error instanceof Error ? error.message : '未知错误') + '（朗读会自动回退系统语音）';
+  }
+};
+
+ttsEdgeEnabled.addEventListener('change', () => {
+  applyTtsEdgePanel();
+  void (async () => {
+    const config = await getConfig();
+    await saveConfig({ ...config, ttsSource: ttsEdgeEnabled.checked ? 'edge' : 'system' });
+    setStatus(ttsStatus, ttsEdgeEnabled.checked ? '已切换到 Edge 云端语音。' : '已切换回系统语音。', 'ok');
+    if (ttsEdgeEnabled.checked && ttsEdgeVoices.length === 0) void loadTtsEdgeVoices();
+  })();
+});
+
+ttsEdgeVoiceSelect.addEventListener('change', () => {
+  void (async () => {
+    const config = await getConfig();
+    await saveConfig({ ...config, ttsEdgeVoice: ttsEdgeVoiceSelect.value });
+    setStatus(ttsStatus, '云端音色已保存。', 'ok');
+  })();
+});
+
+syncTtsRate();
+refreshTtsVoices();
+void (async () => {
+  const config = await getConfig();
+  ttsRateInput.value = String(config.ttsRate);
+  syncTtsRate();
+  if (config.ttsVoiceURI) ttsVoiceSelect.value = config.ttsVoiceURI;
+  ttsEdgeEnabled.checked = config.ttsSource === 'edge';
+  applyTtsEdgePanel();
+  ttsEdgeVoiceSelect.value = config.ttsEdgeVoice;
+  if (config.ttsSource === 'edge') void loadTtsEdgeVoices();
+})();
+
+// ── 站点规则：个人规则 CRUD + 订阅仓库管理 ──
+let editingRuleId = '';
+
+const selectorsToLines = (selectors: readonly string[]): string => selectors.join('\n');
+
+const renderRuleList = (rules: readonly SiteRule[]): void => {
+  ruleList.textContent = '';
+  ruleEmpty.hidden = rules.length > 0;
+  for (const rule of rules) {
+    const row = document.createElement('div');
+    row.className = 'profile-row';
+    const main = document.createElement('div');
+    main.className = 'profile-main';
+    const name = document.createElement('div');
+    name.className = 'profile-name';
+    name.textContent = (rule.enabled ? '' : '［已停用］') + rule.name;
+    const sub = document.createElement('div');
+    sub.className = 'profile-sub';
+    sub.textContent = summarizeRule(rule);
+    sub.title = sub.textContent;
+    main.append(name, sub);
+    const actions = document.createElement('span');
+    actions.className = 'profile-actions';
+    const toggle = document.createElement('button');
+    toggle.className = 'btn-small';
+    toggle.type = 'button';
+    toggle.textContent = rule.enabled ? '停用' : '启用';
+    toggle.addEventListener('click', () => {
+      void (async () => {
+        const config = await getConfig();
+        await saveConfig({
+          ...config,
+          siteRules: config.siteRules.map((item) => (item.id === rule.id ? { ...item, enabled: !item.enabled } : item)),
+        });
+        renderRuleList((await getConfig()).siteRules);
+      })();
+    });
+    const edit = document.createElement('button');
+    edit.className = 'btn-small';
+    edit.type = 'button';
+    edit.textContent = '编辑';
+    edit.addEventListener('click', () => {
+      editingRuleId = rule.id;
+      ruleNameInput.value = rule.name;
+      ruleHostInput.value = rule.hostPattern;
+      ruleIncludeInput.value = selectorsToLines(rule.includeSelectors);
+      ruleExcludeInput.value = selectorsToLines(rule.excludeSelectors);
+      ruleForceInput.checked = rule.forceInclude;
+      ruleEditCancelButton.hidden = false;
+      ruleSaveButton.textContent = '更新规则';
+      ruleNameInput.focus();
+    });
+    const remove = document.createElement('button');
+    remove.className = 'btn-small';
+    remove.type = 'button';
+    remove.textContent = '删除';
+    remove.addEventListener('click', () => {
+      void (async () => {
+        const config = await getConfig();
+        await saveConfig({ ...config, siteRules: config.siteRules.filter((item) => item.id !== rule.id) });
+        if (editingRuleId === rule.id) clearRuleForm();
+        renderRuleList((await getConfig()).siteRules);
+        setStatus(ruleStatus, '规则已删除。', 'ok');
+      })();
+    });
+    actions.append(toggle, edit, remove);
+    row.append(main, actions);
+    ruleList.append(row);
+  }
+};
+
+const clearRuleForm = (): void => {
+  editingRuleId = '';
+  ruleNameInput.value = '';
+  ruleHostInput.value = '';
+  ruleIncludeInput.value = '';
+  ruleExcludeInput.value = '';
+  ruleForceInput.checked = false;
+  ruleSaveButton.textContent = '保存规则';
+  ruleEditCancelButton.hidden = true;
+};
+
+// 拾取：向 background 请求在目标页启动拾取器；结果经瞬时键 storage.onChanged 回填
+let rulePickArmed = false;
+rulePickElement.addEventListener('click', () => {
+  void (async () => {
+    rulePickArmed = true;
+    rulePickHint.textContent = '正在切换到目标网页拾取…（拾取后回到此页即可看到回填）';
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'element-picker-start' }) as
+        { ok: boolean; url?: string; error?: string };
+      if (!response?.ok) throw new Error(response?.error || '启动拾取失败。');
+      rulePickHint.textContent = '拾取模式已开启：到目标网页点击要选取的元素（Esc 退出）。';
+    } catch (error) {
+      rulePickArmed = false;
+      rulePickHint.textContent = '启动失败：' + (error instanceof Error ? error.message : '未知错误');
+    }
+  })();
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !changes[PICKED_ELEMENT_KEY] || !rulePickArmed) return;
+  const picked = changes[PICKED_ELEMENT_KEY].newValue as PickedElement | undefined;
+  if (!picked?.selector) return;
+  rulePickArmed = false;
+  if (!ruleNameInput.value.trim()) {
+    try {
+      ruleNameInput.value = picked.title ? `${picked.title.slice(0, 20)} 拾取` : '拾取规则';
+    } catch { /* 标题异常时留空 */ }
+  }
+  try {
+    ruleHostInput.value = new URL(picked.url).hostname;
+  } catch { /* 非 http url */ }
+  const existing = parseSelectorLines(ruleIncludeInput.value);
+  if (!existing.includes(picked.selector)) {
+    ruleIncludeInput.value = [...existing, picked.selector].join(String.fromCharCode(10));
+    if (!ruleForceInput.checked) ruleForceInput.checked = true;
+  }
+  rulePickHint.textContent = picked.unique
+    ? `已拾取：${picked.label} → ${picked.selector}`
+    : `已拾取 ${picked.label}，但该选择器当前不唯一（页面可能有重复结构），建议在下方补充限定。`;
+});
+
+ruleSaveButton.addEventListener('click', () => {
+  void (async () => {
+    const built = buildRuleFromForm({
+      name: ruleNameInput.value,
+      hostPattern: ruleHostInput.value,
+      includeText: ruleIncludeInput.value,
+      excludeText: ruleExcludeInput.value,
+      forceInclude: ruleForceInput.checked,
+    }, editingRuleId || `p-${Date.now()}`);
+    if (built.error) {
+      setStatus(ruleStatus, built.error === 'empty-rule' ? '请至少填写一个选择器，或勾选「强捞」。' : '请填写规则名称与站点。', 'error');
+      return;
+    }
+    const config = await getConfig();
+    const { rules: siteRules, mode, dropped } = applyRuleEdit(config.siteRules, editingRuleId, built.rule);
+    await saveConfig({ ...config, siteRules });
+    clearRuleForm();
+    renderRuleList(siteRules);
+    setStatus(
+      ruleStatus,
+      dropped > 0
+        ? `${mode === 'updated' ? '已更新' : '已保存'}（${dropped} 个无效选择器已剔除）。`
+        : `${mode === 'updated' ? '规则已更新' : '规则已保存'}，下次翻译生效。`,
+      dropped > 0 ? 'error' : 'ok',
+    );
+  })();
+});
+ruleEditCancelButton.addEventListener('click', () => {
+  clearRuleForm();
+  setStatus(ruleStatus, '已取消编辑。', 'ok');
+});
+
+const renderRuleSubs = (urls: readonly string[], cache: { rules: readonly SiteRule[]; fetchedAt: number }): void => {
+  ruleSubList.textContent = '';
+  for (const url of urls) {
+    const row = document.createElement('div');
+    row.className = 'profile-row';
+    const main = document.createElement('div');
+    main.className = 'profile-main';
+    const name = document.createElement('div');
+    name.className = 'profile-name';
+    name.textContent = url;
+    name.title = url;
+    const sub = document.createElement('div');
+    sub.className = 'profile-sub';
+    sub.textContent = isRuleCacheFresh(cache)
+      ? `已缓存 ${cache.rules.length} 条规则 · ${new Date(cache.fetchedAt).toLocaleString()}`
+      : '缓存已过期，点「立即更新订阅」';
+    main.append(name, sub);
+    const remove = document.createElement('button');
+    remove.className = 'btn-small';
+    remove.type = 'button';
+    remove.textContent = '移除';
+    remove.addEventListener('click', () => {
+      void (async () => {
+        const config = await getConfig();
+        const ruleSubscriptions = config.ruleSubscriptions.filter((item) => item !== url);
+        await saveConfig({ ...config, ruleSubscriptions });
+        renderRuleSubs(ruleSubscriptions, await loadRuleCache());
+        setStatus(ruleSubStatus, '已移除订阅地址。', 'ok');
+      })();
+    });
+    row.append(main, remove);
+    ruleSubList.append(row);
+  }
+  if (urls.length === 0) {
+    setStatus(ruleSubStatus, '未订阅任何仓库。你也可以自己写一份 JSON 放到任意 HTTPS 地址。', 'idle');
+  }
+};
+
+ruleSubAddButton.addEventListener('click', () => {
+  void (async () => {
+    const url = ruleSubUrlInput.value.trim();
+    const config = await getConfig();
+    const merged = sanitizeRuleSubscriptions([...config.ruleSubscriptions, url]);
+    if (!merged.includes(url)) {
+      setStatus(ruleSubStatus, '地址无效（需 http/https）或订阅数已达上限（5）。', 'error');
+      return;
+    }
+    await saveConfig({ ...config, ruleSubscriptions: merged });
+    ruleSubUrlInput.value = '';
+    renderRuleSubs(merged, await loadRuleCache());
+    setStatus(ruleSubStatus, '订阅已添加，点「立即更新订阅」拉取规则。', 'ok');
+  })();
+});
+
+ruleSubRefreshButton.addEventListener('click', () => {
+  void (async () => {
+    const config = await getConfig();
+    if (config.ruleSubscriptions.length === 0) {
+      setStatus(ruleSubStatus, '先添加至少一个仓库地址。', 'error');
+      return;
+    }
+    setStatus(ruleSubStatus, '拉取中…', 'idle');
+    const results: { url: string; rules?: SiteRule[]; error?: string }[] = [];
+    for (const url of config.ruleSubscriptions) {
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'fetch-rule-repository', url }) as
+          { ok: boolean; rules?: SiteRule[]; error?: string };
+        results.push(response?.ok && response.rules ? { url, rules: response.rules } : { url, error: response?.error || '未知错误' });
+      } catch (error) {
+        results.push({ url, error: error instanceof Error ? error.message : '未知错误' });
+      }
+    }
+    const merge = mergeSubscriptionResults(results);
+    if (merge.shouldWriteCache) await saveRuleCache({ rules: merge.rules, fetchedAt: Date.now() });
+    const shown = merge.rules.length > 0 ? { rules: merge.rules, fetchedAt: Date.now() } : await loadRuleCache();
+    renderRuleSubs(config.ruleSubscriptions, shown);
+    if (merge.success) {
+      setStatus(ruleSubStatus, `已更新：${merge.rules.length} 条规则入库（缓存 24 小时）。`, 'ok');
+      showToast('规则订阅已更新');
+    } else {
+      setStatus(ruleSubStatus, `部分失败（${merge.failures.length}/${config.ruleSubscriptions.length}）——${merge.failures[0]?.url}：${merge.failures[0]?.error}`, 'error');
+    }
+  })();
+});
+
+rulePreviewCopyButton.addEventListener('click', () => {
+  const command = "document.dispatchEvent(new CustomEvent('moyi:preview-site-rules'))";
+  void navigator.clipboard?.writeText(command).then(
+    () => setStatus(rulePreviewStatus, '已复制，去目标网页控制台粘贴执行。', 'ok'),
+    () => setStatus(rulePreviewStatus, '复制失败，请手动选中复制。', 'error'),
+  );
+});
+
+void (async () => {
+  const config = await getConfig();
+  renderRuleList(config.siteRules);
+  renderRuleSubs(config.ruleSubscriptions, await loadRuleCache());
+})();
+
 // ── 恢复全部默认配置（恢复出厂） ──
 resetAllButton.addEventListener('click', () => {
   void (async () => {
@@ -1406,9 +2480,9 @@ resetAllButton.addEventListener('click', () => {
 
 // ── 侧边栏导航：每个分区独立成页，点击即切换视图 ──
 const navItems = Array.from(document.querySelectorAll<HTMLButtonElement>('.nav-item'));
-const sections = ['sec-service', 'sec-prompt', 'sec-style', 'sec-subtitle', 'sec-shortcuts', 'sec-about', 'sec-settings']
-  .map((id) => document.getElementById(id))
-  .filter((element): element is HTMLElement => element !== null);
+// 分区清单从 DOM 推导而非硬编码 id 列表：新增分区漏登记 = 菜单点了是空白页
+// （本项目踩过一次：生词本/备份与同步/站点规则三个分区同时空白）。
+const sections = Array.from(document.querySelectorAll<HTMLElement>('section.group[id]'));
 const showSection = (targetId: string): void => {
   navItems.forEach((item) => {
     const active = item.dataset.target === targetId;
@@ -1458,6 +2532,8 @@ resetSubtitleButton.addEventListener('click', () => {
     subtitleFontCustomInput.value = '';
     subtitleFontCustomInput.hidden = true;
     subtitleHideNativeInput.checked = DEFAULT_SUBTITLE_CONFIG.hideNativeCaptions;
+    subtitleXEnabledInput.checked = DEFAULT_SUBTITLE_CONFIG.xEnabled;
+    subtitleAiSegmentationInput.checked = DEFAULT_SUBTITLE_CONFIG.aiSegmentation;
     syncSubtitleControls();
     await saveSubtitleNow();
   })();

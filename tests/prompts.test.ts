@@ -4,7 +4,7 @@ import {
   buildStyleGuidance,
   sanitizePromptStyle,
 } from '../chrome-plugin/src/utils/prompts';
-import { SYSTEM_PROMPT, buildBatchMessages, buildBatchSystemPrompt, buildMessages } from '../chrome-plugin/src/service/templates';
+import { SYSTEM_PROMPT, buildBatchMessages, buildBatchSystemPrompt, buildMessages, buildPrecedingContextBlock } from '../chrome-plugin/src/service/templates';
 
 describe('prompt styles registry', () => {
   it('exposes the three built-in styles', () => {
@@ -79,5 +79,36 @@ describe('template integration keeps format contract immutable', () => {
     const styled = buildMessages('hi', '简体中文', { promptStyle: 'general' });
     expect(styled[0].content).toContain(SYSTEM_PROMPT);
     expect(styled[0].content).toContain('natural, fluent');
+  });
+});
+
+describe('buildPrecedingContextBlock（跨批上下文）', () => {
+  it('空上文返回空串：无上文批的请求体与旧版逐字节一致', () => {
+    expect(buildPrecedingContextBlock([])).toBe('');
+    expect(buildPrecedingContextBlock(['', '   '])).toBe('');
+  });
+
+  it('截取末尾 3 段、单段限 800 字符、trim 空白', () => {
+    const block = buildPrecedingContextBlock(['a', 'b', 'c', ' d ', 'e'.repeat(900)]);
+    expect(block).toContain('<context_1>c</context_1>');
+    expect(block).toContain('<context_2>d</context_2>');
+    expect(block).toContain(`<context_3>${'e'.repeat(800)}</context_3>`);
+    expect(block).not.toContain('<context_4');
+    expect(block).not.toContain('>b<');
+    expect(block).not.toContain('>a<');
+    expect(block).toContain('never translate or output them');
+  });
+
+  it('上文块进入批量消息的 user 内容且不影响输出契约', () => {
+    const messages = buildBatchMessages(['hello'], '简体中文', buildPrecedingContextBlock(['前一段原文']));
+    const user = String(messages[1].content);
+    expect(user).toContain('<context_1>前一段原文</context_1>');
+    expect(user).toContain('<paragraph_1>hello</paragraph_1>');
+  });
+
+  it('单段消息同样携带上文块', () => {
+    const messages = buildMessages('hello', '简体中文', undefined, buildPrecedingContextBlock(['前一段原文']));
+    expect(String(messages[1].content)).toContain('<context_1>前一段原文</context_1>');
+    expect(String(messages[1].content)).toContain('Translate the following text');
   });
 });

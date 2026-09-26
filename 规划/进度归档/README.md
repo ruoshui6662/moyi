@@ -18,6 +18,10 @@
 | `plan-sess_dc79dac8-*.md` | 2026-08-24 | Logo 资产接入（工具栏/popup/options/悬浮球） | ✅ 已完成（`scripts/gen-assets.mjs` + `floatLogo.ts`） |
 | `plan-sess_8bfc9c36-*.md` | 2026-08-25 | YouTube 播放器内 Logo 控件 + 快捷面板 | ✅ 已完成（`subtitles/renderer.ts` 控制条按钮与面板） |
 | `plan-sess_ae61372f-*.md` | 2026-08-26 | AI 断句方案（学习陪读蛙 read-frog） | ✅ 已完成（`subtitles/ai-segmenter.ts` + `segment-subtitles` 消息） |
+| `规划/功能执行计划-仅插件-分阶段验收.md`（W1.1–W1.3，执行记录在文内 §八） | 2026-09-23~24 | M1「读完能学」：术语表 / 划词查词词卡 / 生词本（仅插件，油猴零改动） | ✅ 已完成并过 G1 发版门（v0.1.7；`glossary.ts` + `selectionLookup.ts` + `vocabbook.ts` + `selection.content.ts` 独立入口，461 项测试） |
+| `规划/功能执行计划-仅插件-分阶段验收.md`（W2.1–W2.3，执行记录在文内 §八） | 2026-09-24 | M2「写与省」：动态装箱+跨批上下文+429 重试 / 输入框翻译 / 配置备份+WebDAV+场景 Profile（顺手关闭待办 2/6） | ✅ 已完成并过 G2 发版门（v0.1.8；`configSync.ts` + `inputTranslate.ts` 独立入口，497 项测试） |
+| `规划/功能执行计划-仅插件-分阶段验收.md`（W3.1–W3.4，执行记录在文内 §八）+ `规划/功能立项-T8站点规则-实施计划.md` | 2026-09-25 | M3「听与生态」：TTS 朗读 v1（字幕导出 pass）/ AI 阅读卡 / 站点规则 v1（立项 S1–S5） | ✅ 已完成并过 G3 收官门（v0.1.9；`tts.ts` + 阅读卡深究态 + `siteRules.ts` 引擎旁路 + 事件桥隔离，555 项测试） |
+| M4「体验补齐」：划词查词应用内快捷键 + 悬停查词（opt-in） | ✅ 已完成并随 v0.1.10 发版（561 项测试） |
 
 > 迁移记录：2026-09-22 由 `.zcode/plans/` 迁入，文件内容未改动。
 > 后续新的会话计划若仍生成在 `.zcode/plans/`，请定期同步到本目录。

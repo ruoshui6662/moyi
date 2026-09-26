@@ -9,6 +9,11 @@
 export interface PageShortcuts {
   translate: string;
   restore: string;
+  /** 输入框翻译（插件独有功能；可选字段：油猴端 settingsPanel 旧版构造的快捷键对象
+   *  无此键——保持可选使其继续通过 strict 编译，用户脚本零改动）。 */
+  inputTranslate?: string;
+  /** 划词查词（插件独有；可选字段保油猴旧构造对象零改动）。 */
+  lookup?: string;
 }
 
 export const EMPTY_SHORTCUTS: PageShortcuts = { translate: '', restore: '' };

@@ -1,6 +1,9 @@
 import type { TranslationPromptStyle } from './prompts';
 import { CUSTOM_PROVIDER_ID, resolveProviderSettings, sanitizeProviderId, sanitizeProviders, type ProviderSettings } from './providers';
 import type { PageShortcuts } from './shortcuts';
+import { sanitizeGlossary, type GlossaryEntry } from './glossary';
+import { sanitizeRuleSubscriptions, sanitizeSiteRules, type SiteRule } from './siteRules';
+import { sanitizeConfigHistory, sanitizeProfiles, sanitizeWebDavSettings, type ConfigHistoryEntry, type SceneProfile, type WebDavSettings } from './configSync';
 
 export type { TranslationPromptStyle } from './prompts';
 export type { ProviderSettings } from './providers';
@@ -31,6 +34,16 @@ export const FLOAT_OPACITY_MIN = 0.4;
 export const FLOAT_OPACITY_MAX = 1;
 export const FLOAT_OPACITY_DEFAULT = 0.9;
 
+/** 朗读音源：系统语音（默认）/ Edge 云端语音（可选，非公开协议）。 */
+export type TtsSource = 'system' | 'edge';
+/** Edge 音色默认项：中文女声，通用可用。 */
+export const DEFAULT_EDGE_VOICE = 'zh-CN-XiaoxiaoNeural';
+/** Edge 音色 ShortName 形态：zh-CN-XiaoxiaoNeural / en-US-AvaNeural… */
+const sanitizeEdgeVoice = (value: unknown): string => {
+  const voice = typeof value === 'string' ? value.trim() : '';
+  return /^[a-z]{2,3}(-[A-Za-z]+)+$/.test(voice) && voice.length <= 60 ? voice : DEFAULT_EDGE_VOICE;
+};
+
 export interface TranslatorConfig {
   endpoint: string;
   apiKey: string;
@@ -53,8 +66,32 @@ export interface TranslatorConfig {
   promptStyle: TranslationPromptStyle;
   useCustomPrompt: boolean;
   customPrompt: string;
+  /** 划词查词卡（仅扩展端消费；油猴端无入口，惰性字段）。 */
+  selectionLookupEnabled: boolean;
+  /** 悬停查词（默认关：被动弹卡打断阅读，opt-in 更稳妥）。 */
+  selectionHoverEnabled: boolean;
+  /** 朗读语速（0.5–2 倍；1 = 系统默认）。 */
+  ttsRate: number;
+  /** 朗读音色 voiceURI（系统语音）；空串 = 按语言自动挑选。 */
+  ttsVoiceURI: string;
+  /** 朗读音源：系统语音（默认、离线可用）/ Edge 云端语音（非公开协议，可选）。 */
+  ttsSource: TtsSource;
+  /** Edge 云端音色 ShortName（如 zh-CN-XiaoxiaoNeural）。 */
+  ttsEdgeVoice: string;
+  /** 个人站点规则（host + include/exclude + forceInclude；仅扩展端设置页使用）。 */
+  siteRules: SiteRule[];
+  /** 规则仓库订阅 URL 列表（拉取走 background，规则本体落独立缓存键）。 */
+  ruleSubscriptions: string[];
+  /** WebDAV 同步设置（仅扩展端设置页使用）。 */
+  webdav: WebDavSettings;
+  /** 场景 Profile（服务商 + 风格 + 样式组合）。 */
+  profiles: SceneProfile[];
+  /** 配置历史快照（无凭据），供误改回滚。 */
+  configHistory: ConfigHistoryEntry[];
   providerId: string;
   providers: Record<string, ProviderSettings>;
+  /** 术语表（原词 → 固定译名）；openai 族注入提示词、MT 族译文替换，空表零开销。 */
+  glossary: GlossaryEntry[];
   /** 应用内快捷键（页面内 keydown 触发）；空串表示未启用。 */
   shortcuts: PageShortcuts;
 }
@@ -76,9 +113,21 @@ export const DEFAULT_CONFIG: TranslatorConfig = {
   promptStyle: 'general',
   useCustomPrompt: false,
   customPrompt: '',
+  selectionLookupEnabled: true,
+  selectionHoverEnabled: false,
+  ttsRate: 1,
+  ttsVoiceURI: '',
+  ttsSource: 'system',
+  ttsEdgeVoice: DEFAULT_EDGE_VOICE,
+  siteRules: [],
+  ruleSubscriptions: [],
+  webdav: { url: '', username: '', password: '', path: 'moyi-config.json' },
+  profiles: [],
+  configHistory: [],
   providerId: 'openai',
   providers: {},
-  shortcuts: { translate: '', restore: '' },
+  glossary: [],
+  shortcuts: { translate: '', restore: '', inputTranslate: '', lookup: '' },
 };
 
 const STORAGE_KEY = 'personal-translator-config';
@@ -105,6 +154,17 @@ const sanitizeCustomPrompt = (value: unknown): string => {
   return value.slice(0, CUSTOM_PROMPT_MAX_LENGTH);
 };
 
+/** 朗读语速：与 TTS 引擎一致钳 [0.5, 2]；缺失回 1。 */
+const sanitizeTtsRate = (value: unknown): number => {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(2, Math.max(0.5, Math.round(parsed * 10) / 10));
+};
+
+/** 音色标识：voiceURI 字符串，限长防存储污染；空串 = 自动。 */
+const sanitizeTtsVoiceURI = (value: unknown): string =>
+  typeof value === 'string' ? value.trim().slice(0, 200) : '';
+
 export const getConfig = async (): Promise<TranslatorConfig> => {
   const result = await chrome.storage.local.get(STORAGE_KEY);
   const merged: TranslatorConfig = {
@@ -120,9 +180,21 @@ export const getConfig = async (): Promise<TranslatorConfig> => {
   merged.floatSize = sanitizeFloatSize(merged.floatSize);
   merged.floatOpacity = sanitizeFloatOpacity(merged.floatOpacity);
   merged.customPrompt = sanitizeCustomPrompt(merged.customPrompt);
+  merged.glossary = sanitizeGlossary(merged.glossary);
+  merged.ttsRate = sanitizeTtsRate(merged.ttsRate);
+  merged.ttsVoiceURI = sanitizeTtsVoiceURI(merged.ttsVoiceURI);
+  merged.ttsSource = merged.ttsSource === 'edge' ? 'edge' : 'system';
+  merged.ttsEdgeVoice = sanitizeEdgeVoice(merged.ttsEdgeVoice);
+  merged.siteRules = sanitizeSiteRules(merged.siteRules);
+  merged.ruleSubscriptions = sanitizeRuleSubscriptions(merged.ruleSubscriptions);
+  merged.webdav = sanitizeWebDavSettings(merged.webdav);
+  merged.profiles = sanitizeProfiles(merged.profiles);
+  merged.configHistory = sanitizeConfigHistory(merged.configHistory);
   merged.shortcuts = {
     translate: sanitizeShortcut(merged.shortcuts?.translate),
     restore: sanitizeShortcut(merged.shortcuts?.restore),
+    inputTranslate: sanitizeShortcut(merged.shortcuts?.inputTranslate),
+    lookup: sanitizeShortcut(merged.shortcuts?.lookup),
   };
 
   const providers = sanitizeProviders(merged.providers);
@@ -161,9 +233,19 @@ export const saveConfig = async (config: TranslatorConfig): Promise<void> => {
     floatSize: sanitizeFloatSize(config.floatSize),
     floatOpacity: sanitizeFloatOpacity(config.floatOpacity),
     customPrompt: sanitizeCustomPrompt(config.customPrompt),
+    glossary: sanitizeGlossary(config.glossary),
+    ttsRate: sanitizeTtsRate(config.ttsRate),
+    ttsVoiceURI: sanitizeTtsVoiceURI(config.ttsVoiceURI),
+    siteRules: sanitizeSiteRules(config.siteRules),
+    ruleSubscriptions: sanitizeRuleSubscriptions(config.ruleSubscriptions),
+    webdav: sanitizeWebDavSettings(config.webdav),
+    profiles: sanitizeProfiles(config.profiles),
+    configHistory: sanitizeConfigHistory(config.configHistory),
     shortcuts: {
       translate: sanitizeShortcut(config.shortcuts?.translate),
       restore: sanitizeShortcut(config.shortcuts?.restore),
+      inputTranslate: sanitizeShortcut(config.shortcuts?.inputTranslate),
+      lookup: sanitizeShortcut(config.shortcuts?.lookup),
     },
   };
   const stored: Record<string, unknown> = { ...DEFAULT_CONFIG, ...sanitized };
